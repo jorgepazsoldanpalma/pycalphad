@@ -11,7 +11,7 @@ float_number = Regex(r'[-+]?([0-9]+\.(?!([0-9]|[eE])))|{0}'.format(regex_after_d
     .setParseAction(lambda t: [float(t[0])])
 
 chemical_formula = Group(OneOrMore(Word(alphas, min=1, max=2) + Optional(float_number, default=1.0))) + \
-                   Optional(Suppress('/') + pos_neg_int_number, default=0)
+                   Optional(Suppress('/') + float_number, default=0)
 
 reg_symbol = r'([A-z][A-z]?)'
 reg_amount = r'([-+]?([0-9]+\.(?!([0-9]|[eE])))|([0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?))?'

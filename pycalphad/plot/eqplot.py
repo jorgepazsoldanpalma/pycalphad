@@ -94,7 +94,10 @@ def eqplot(eq, ax=None, x=None, y=None, z=None, tielines=True, tieline_color=(0,
     elif len(indep_comps) == 2 and len(indep_pots) == 0:
         projection = 'triangular'
     else:
-        raise ValueError('The eqplot projection is not defined and cannot be autodetected. There are {} independent compositions and {} indepedent potentials.'.format(len(indep_comps), len(indep_pots)))
+# HI! Jorge here! Line right below (98) is a modification to original script in order to 
+#Help plot pseudobinaries
+        projection = None
+#        raise ValueError('The eqplot projection is not defined and cannot be autodetected. There are {} independent compositions and {} indepedent potentials.'.format(len(indep_comps), len(indep_pots)))
     if z is not None:
         raise NotImplementedError('3D plotting is not yet implemented')
     if ax is None:
@@ -126,11 +129,12 @@ def eqplot(eq, ax=None, x=None, y=None, z=None, tielines=True, tieline_color=(0,
     comps = map(str, sorted(np.array(eq.coords['component'].values, dtype='U'), key=str))
     eq['component'] = np.array(eq['component'], dtype='U')
     eq['Phase'].values = np.array(eq['Phase'].values, dtype='U')
+#    print('Jorge. This is eq[Phase].values',eq['Phase'].values)
 
     # Select all two- and three-phase regions
     three_phase_idx = np.nonzero(np.sum(eq.Phase.values != '', axis=-1, dtype=np.int_) == 3)
     two_phase_idx = np.nonzero(np.sum(eq.Phase.values != '', axis=-1, dtype=np.int_) == 2)
-
+    
     legend_handles, colorlist = legend_generator(phases)
 
     # For both two and three phase, cast the tuple of indices to an array and flatten
@@ -144,7 +148,10 @@ def eqplot(eq, ax=None, x=None, y=None, z=None, tielines=True, tieline_color=(0,
             two_phase_y = eq.X.sel(component=y.species.name).values[two_phase_idx][..., :2]
         else:
             # it's a StateVariable. This must be True
-            two_phase_y = np.take(eq[str(y)].values, two_phase_idx[list(str(i) for i in conds.keys()).index(str(y))])
+#            two_phase_y = np.take(eq[str(y)].values, two_phase_idx[list(str(i) for i in conds.keys()).index(str(y))+1])
+            two_phase_y = np.take(eq[str(y)].values,two_phase_idx[eq.Phase.dims.index(str(y))])
+#            print('WHAT THE FUCK IS Y',y)
+#            print('Jorge.HERE IT IS two_phase_y',type(list(str(i) for i in conds.keys()).index(str(y))))                    
             # because the above gave us a shape of (n,) instead of (n,2) we are going to create it ourselves
             two_phase_y = np.array([two_phase_y, two_phase_y]).swapaxes(0, 1)
 
@@ -159,6 +166,7 @@ def eqplot(eq, ax=None, x=None, y=None, z=None, tielines=True, tieline_color=(0,
                                            np.concatenate((two_phase_x[..., 1][..., np.newaxis], two_phase_y[..., 1][..., np.newaxis]), axis=-1)])
             two_phase_tielines = np.rollaxis(two_phase_tielines, 1)
             lc = mc.LineCollection(two_phase_tielines, zorder=1, colors=tieline_color, linewidths=[0.5, 0.5])
+#            print('This is from eqplot',two_phase_tielines,'This part is lc',lc)
             ax.add_collection(lc)
 
     # If we found three phase regions:

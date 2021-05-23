@@ -196,7 +196,7 @@ def _tdb_grammar(): #pylint: disable=R0914
     symbol_name = Word(alphanums+'_:', min=1)
     ref_phase_name = symbol_name = Word(alphanums+'_-:()/', min=1)
     # species name, e.g., CO2, AL, FE3+
-    species_name = Word(alphanums+'+-*/_.', min=1) + Optional(Suppress('%'))
+    species_name = Word(alphanums+'[]+-*/_.', min=1) + Optional(Suppress('%'))
     # constituent arrays are colon-delimited
     # each subarray can be comma- or space-delimited
     constituent_array = Group(delimitedList(Group(OneOrMore(Optional(Suppress(',')) + species_name)), ':'))
@@ -248,7 +248,7 @@ def _tdb_grammar(): #pylint: disable=R0914
     # PARAMETER
     cmd_parameter = TCCommand('PARAMETER') + param_types + \
         Suppress('(') + symbol_name + \
-        Optional(Suppress('&') + Word(alphas+'/-', min=1, max=2), default=None) + \
+        Optional(Suppress('&') + species_name, default=None) + \
         Suppress(',') + constituent_array + \
         Optional(Suppress(';') + int_number, default=0) + \
         Suppress(')') + func_expr.setParseAction(_make_piecewise_ast) + \
@@ -287,9 +287,11 @@ def _process_typedef(targetdb, typechar, line):
     del targetdb._typechar_map[typechar]
     # GES A_P_D BCC_A2 MAGNETIC  -1    0.4
     tokens = line.replace(',', '').split()
+
+    
     if len(tokens) < 4:
         return
-    keyword = expand_keyword(['DISORDERED_PART', 'MAGNETIC'], tokens[3].upper())[0]
+    keyword = expand_keyword(['DISORDERED_PART', 'MAGNETIC','MQMQA'], tokens[3].upper())[0]
     if len(keyword) == 0:
         raise ValueError('Unknown type definition keyword: {}'.format(tokens[3]))
     if len(matching_phases) == 0:
@@ -303,7 +305,6 @@ def _process_typedef(targetdb, typechar, line):
         }
         for phase_name in matching_phases:
             targetdb.phases[phase_name].model_hints.update(model_hints)
-
     # GES A_P_D L12_FCC DIS_PART FCC_A1
     if keyword == 'DISORDERED_PART':
         # order-disorder model: since we need to add model_hints to both the
@@ -324,7 +325,35 @@ def _process_typedef(targetdb, typechar, line):
             targetdb.phases[disordered_phase].model_hints.update(hint)
         else:
             raise ValueError(f"The {disordered_phase} phase is not in the database, but is defined by: `TYPE_DEFINTION {typechar} {line}`")
+    if keyword == 'MQMQA':
+        token=tokens[4:]
+        # This is for mqmqa I don't know what I am doing yet though....
+        in_cat=[i for num,i in enumerate(token) if num<token.index('ANIONS') and i !='CATIONS']
+        in_an=[i for num,i in enumerate(token) if num>token.index('ANIONS')]
+        chemical_group={'cations':{},'anions':{}}
+        species_cat=[i for i in targetdb.species if i.name in in_cat]
+        species_an=[i for i in targetdb.species if i.name in in_an]
 
+
+        Jcations={}
+        Janions={}
+        for i in species_cat:
+            if i.name in in_cat:
+                a=int(in_cat[in_cat.index(i.name)+1])        
+                Jcations[i]=a
+
+        for i in species_an:
+            if i.name in in_an:
+                a=int(in_an[in_an.index(i.name)+1])        
+                Janions[i]=a
+        chemical_group['cations']=Jcations
+        chemical_group['anions']=Janions        
+
+        model_hints = {
+            'mqmqa': {'chemical_groups':chemical_group}
+        }
+        for phase_name in matching_phases:
+            targetdb.phases[phase_name].model_hints.update(model_hints)
 
 phase_options = {'ionic_liquid_2SL': 'Y',
                  'symmetry_FCC_4SL': 'F',
@@ -332,7 +361,8 @@ phase_options = {'ionic_liquid_2SL': 'Y',
                  'liquid': 'L',
                  'gas': 'G',
                  'aqueous': 'A',
-                 'charged_phase': 'I'}
+                 'charged_phase': 'I',
+                 'MQMQA': 'M'}
 inv_phase_options = dict([reversed(i) for i in phase_options.items()])
 
 
@@ -793,6 +823,15 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             # We handle adding the correct typedef when we write the ordered phase
             del model_hints['ordered_phase']
             del model_hints['disordered_phase']
+        if 'mqmqa' in model_hints.keys():
+            new_char = typedef_chars.pop()
+            typedefs[name].append(new_char)
+            chemical_groups = model_hints['mqmqa']['chemical_groups']
+            cations = ' '.join([f'{species.name} {group_index}' for species, group_index in chemical_groups.get('cations', {}).items()])
+            anions = ' '.join([f'{species.name} {group_index}' for species, group_index in chemical_groups.get('anions', {}).items()])
+            output += 'TYPE_DEFINITION {} GES AMEND_PHASE_DESCRIPTION {} MQMQA CATIONS {} ANIONS {} !\n'\
+                .format(new_char,name.upper(),cations,anions)
+            del model_hints['mqmqa']
         if 'ihj_magnetic_afm_factor' in model_hints.keys():
             new_char = typedef_chars.pop()
             typedefs[name].append(new_char)
@@ -800,7 +839,7 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                 .format(new_char, name.upper(), model_hints['ihj_magnetic_afm_factor'],
                         model_hints['ihj_magnetic_structure_factor'])
             del model_hints['ihj_magnetic_afm_factor']
-            del model_hints['ihj_magnetic_structure_factor']
+            del model_hints['ihj_magnetic_structure_factor']  
         if len(model_hints) > 0:
             # Some model hints were not properly consumed
             raise ValueError('Not all model hints are supported: {}'.format(model_hints))

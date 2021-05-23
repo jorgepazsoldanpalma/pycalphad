@@ -719,6 +719,7 @@ class Phase_SUBQ(PhaseBase):
         anion_el_chg_pairs = list(zip(self.subl_2_const, [-1*c for c in self.subl_2_charges]))
         cations = [rename_element_charge(el, chg) for el, chg in cation_el_chg_pairs]
         anions = [rename_element_charge(el, chg) for el, chg in anion_el_chg_pairs]
+        tot_ele=cation_el_chg_pairs+anion_el_chg_pairs
 
         # Add the "pure" (renamed) species to the database so the phase constituents can be added
         dbf.species.update(map(_species, cation_el_chg_pairs))
@@ -730,12 +731,19 @@ class Phase_SUBQ(PhaseBase):
         #       species names to the real species (and give us a way to compute
         #       mass)?
 
+        
         model_hints = {
             'mqmqa': {
                 'chemical_groups': {'cations': dict(zip(map(_species, cation_el_chg_pairs), self.subl_1_chemical_groups))
                                     , 'anions': dict(zip(map(_species, anion_el_chg_pairs), self.subl_2_chemical_groups))}
             }
         }
+
+
+#        model_hints = {
+#            'mqmqa': list(map(_species, tot_ele))
+#        }       
+
         dbf.add_phase(self.phase_name, model_hints, sublattices=[1.0])
         dbf.add_phase_constituents(self.phase_name, [cations, anions])
 
@@ -837,7 +845,7 @@ def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_s
         # special case for stoichiometric phases, this is a dummy species, skip it
         _ = toks.parse(str)
     gibbs_eq_type = toks.parse(int)
-
+#    print(species_name,gibbs_eq_type)
     # Determine how to parse the type of thermodynamic option
     has_magnetic = gibbs_eq_type > 12
     gibbs_eq_type_reduced = (gibbs_eq_type - 12) if has_magnetic else gibbs_eq_type
@@ -847,6 +855,7 @@ def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_s
     has_constant_Vm_terms = gibbs_eq_type_reduced in (2, 5, 8, 11)
     has_PTVm_terms = gibbs_eq_type_reduced in (3, 6, 9, 12)
     num_intervals = toks.parse(int)
+#    print('nums_intervals',num_intervals)
     stoichiometry_pure_elements = toks.parseN(num_pure_elements, float)
     if has_constant_Vm_terms:
         raise ValueError("Constant molar volume equations (thermodynamic data options (2, 5, 8, 11)) are not supported yet.")
@@ -872,6 +881,7 @@ def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_s
             toks.parse(float)
             toks.parse(float)
         return EndmemberMagnetic(species_name, gibbs_eq_type, stoichiometry_pure_elements, intervals, curie_temperature, magnetic_moment)
+#    print(Endmember(species_name, gibbs_eq_type, stoichiometry_pure_elements, intervals))
     return Endmember(species_name, gibbs_eq_type, stoichiometry_pure_elements, intervals)
 
 
@@ -1152,17 +1162,18 @@ def read_cs_dat(dbf: Database, fd):
     header, solution_phases, stoichiometric_phases, remaining_tokens = parse_cs_dat(fd.read().upper())
     # add elements and their reference states
     for el, mass in zip(header.pure_elements, header.pure_elements_mass):
-        dbf.elements.add(el)
-        dbf.species.add(v.Species(el))
-        # add element reference state data
-        dbf.refstates[el] = {
-            'mass': mass,
-            # the following metadata is not given in DAT files,
-            # but is standard for our Database files
-            'phase': None,
-            'H298': None,
-            'S298': None,
-        }
+        if 'E(' not in str(el):
+            dbf.elements.add(el)
+            dbf.species.add(v.Species(el))
+            # add element reference state data
+            dbf.refstates[el] = {
+                'mass': mass,
+                # the following metadata is not given in DAT files,
+                # but is standard for our Database files
+                'phase': None,
+                'H298': 0.0,
+                'S298': 0.0,
+            }
     # Each phase subclass knows how to insert itself into the database.
     # The insert method will appropriately insert all endmembers as well.
     processed_phases = []

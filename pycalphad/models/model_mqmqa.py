@@ -1,3 +1,4 @@
+import copy
 import itertools
 from collections import Counter, OrderedDict
 from functools import partial
@@ -6,7 +7,7 @@ from sympy import exp, log, Abs, Add, And, Float, Mul, Piecewise, Pow, S, sin, S
 from tinydb import where
 from .base import ModelBase, _MAX_PARAM_NESTING
 import pycalphad.variables as v
-from pycalphad.core.utils import unpack_components, wrap_symbol
+from pycalphad.core.utils import unpack_components, wrap_symbol, get_pure_elements
 from pycalphad.core.constraints import is_multiphase_constraint
 
 def get_species(*constituents: [(str, v.Species)]) -> v.Species:
@@ -51,7 +52,6 @@ class ModelMQMQA(ModelBase):
         ('idmix', 'ideal_mixing_energy'),
         ('xsmix', 'excess_mixing_energy'),
     ]
-
     def __init__(self, dbe, comps, phase_name, parameters=None):
         self._dbe = dbe
         self._reference_model = None
@@ -167,7 +167,6 @@ class ModelMQMQA(ModelBase):
         # aliases for notation
         Z = partial(self.Z, dbe)
         p = self._p
-
         M = S.Zero
         if species in cations:
             A = species
@@ -312,13 +311,17 @@ class ModelMQMQA(ModelBase):
 
 
     def Z(self, dbe: 'pycalphad.io.Database', species: v.Species, A: v.Species, B: v.Species, X: v.Species, Y: v.Species):
+        Z_cat=sorted((A,B))
+        Z_an=sorted((X,Y))
+        Z_quad=(tuple(Z_cat),tuple(Z_an))
         Zs = dbe._parameters.search(
             (where('phase_name') == self.phase_name) & \
             (where('parameter_type') == "Z") & \
             (where('diffusing_species').test(lambda sp: sp.name == species.name)) & \
             # quadruplet needs to be in 1 sublattice constituent array `[[q]]`, in tuples
-            (where('constituent_array').test(lambda x: x == ((A, B), (X, Y)) ) )
-        )
+            (where('constituent_array').test(lambda x: x == Z_quad)))
+        
+
         if len(Zs) == 0:
             # TODO: add this to the database so we don't need to recalculate? where should that happen?
             return self._calc_Z(dbe, species, A, B, X, Y)
@@ -374,6 +377,48 @@ class ModelMQMQA(ModelBase):
         """Divide by this normalization factor to convert from J/mole-quadruplets to J/mole-atoms"""
         return sum(self.M(self._dbe, c) for c in self.components)
 
+    @property
+    def degree_of_ordering(self):
+        result = S.Zero
+        site_ratio_normalization = S.Zero
+        # Calculate normalization factor
+        for idx, sublattice in enumerate(self.constituents):
+            active = set(sublattice).intersection(self.components)
+            subl_content = sum(int(spec.number_of_atoms > 0) * v.SiteFraction(self.phase_name, idx, spec) for spec in active)
+            site_ratio_normalization += self.site_ratios[idx] * subl_content
+
+        site_ratios = [c/site_ratio_normalization for c in self.site_ratios]
+        for comp in self.components:
+            if comp.number_of_atoms == 0:
+                continue
+            comp_result = S.Zero
+            for idx, sublattice in enumerate(self.constituents):
+                active = set(sublattice).intersection(set(self.components))
+                if comp in active:
+                    comp_result += site_ratios[idx] * Abs(v.SiteFraction(self.phase_name, idx, comp) - self.moles(comp)) / self.moles(comp)
+            result += comp_result
+        return result / sum(int(spec.number_of_atoms > 0) for spec in self.components)
+    DOO = degree_of_ordering
+
+    # Can be defined as a list of pre-computed first derivatives
+    gradient = None
+
+    # Note: In order-disorder phases, TC will always be the *disordered* value of TC
+    curie_temperature = TC = S.Zero
+    beta = BMAG = S.Zero
+    neel_temperature = NT = S.Zero
+
+    #pylint: disable=C0103
+    # These are standard abbreviations from Thermo-Calc for these quantities
+    entropy = SM = property(lambda self: -self.GM.diff(v.T))
+    enthalpy = HM = property(lambda self: self.GM - v.T*self.GM.diff(v.T))
+    heat_capacity = CPM = property(lambda self: -v.T*self.GM.diff(v.T, v.T))
+    #pylint: enable=C0103
+    mixing_energy = GM_MIX = property(lambda self: self.GM - self.reference_model.GM)
+    mixing_enthalpy = HM_MIX = property(lambda self: self.GM_MIX - v.T*self.GM_MIX.diff(v.T))
+    mixing_entropy = SM_MIX = property(lambda self: -self.GM_MIX.diff(v.T))
+    mixing_heat_capacity = CPM_MIX = property(lambda self: -v.T*self.GM_MIX.diff(v.T, v.T))
+
 
     def get_multiphase_constraints(self, conds):
         fixed_chempots = [cond for cond in conds.keys() if isinstance(cond, v.ChemicalPotential)]
@@ -419,14 +464,20 @@ class ModelMQMQA(ModelBase):
                 for j, X in enumerate(anions):
                     for Y in anions[j:]:
                         term1=((abs(X.charge)/self.Z(dbe,X,A,B,X,Y))+(abs(Y.charge)/self.Z(dbe,Y,A,B,X,Y)))**(-1)
+#                        print('first term',term1)
                         term2=(abs(X.charge)*self.Z(dbe,A,A,A,X,X)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[A,A,X,X]*2/self.Z(dbe,A,A,A,X,X))
+#                        print('second term',term2)
                         term3=(abs(X.charge)*self.Z(dbe,B,B,B,X,X)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[B,B,X,X]*2/self.Z(dbe,B,B,B,X,X))
+#                        print('third term',term3)
                         term4=(abs(Y.charge)*self.Z(dbe,A,A,A,Y,Y)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[A,A,Y,Y]*2/self.Z(dbe,A,A,A,Y,Y))
+#                        print('fourth term',term4)                        
                         term5=(abs(Y.charge)*self.Z(dbe,B,B,B,Y,Y)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[B,B,Y,Y]*2/self.Z(dbe,B,B,B,Y,Y))
+#                        print('fifth term',term5)                                                
                         final_term=term1*(term2+term3+term4+term5)
+#                        print(p(A,B,X,Y))
                         surf+=p(A,B,X,Y)*final_term
         return surf/self.normalization
-
+    
 
     def reference_energy(self, dbe):
         """
@@ -451,7 +502,7 @@ class ModelMQMQA(ModelBase):
             Z = self.Z(dbe, A, A, A, X, X)
             terms += (ξ_AX * G_AX)*2/Z
 #        print(terms,self.normalization)
-        return terms#/self.normalization
+        return terms/self.normalization
 
     def ideal_mixing_energy(self, dbe):
         # notational niceties
@@ -505,7 +556,6 @@ class ModelMQMQA(ModelBase):
         cations=self.cations
         anions=self.anions
         p = self._p
-
         subl_1 = constituent_array[0]
         subl_2 = constituent_array[1]
         A=subl_1[0]
@@ -536,7 +586,6 @@ class ModelMQMQA(ModelBase):
         X=subl_2[0]
         Y=subl_2[1]
         non_diff_spe=[i for i in subl_1 if i !=diffusing_species][0]
-
         k_As_cat=[i for i in cations if chem_groups_cat[i]!=chem_groups_cat[diffusing_species] and i not in subl_1]
         l_As_cat=[i for i in cations if chem_groups_cat[i]!=chem_groups_cat[non_diff_spe] and not i in subl_1]
 
@@ -563,8 +612,8 @@ class ModelMQMQA(ModelBase):
     def id_symm(self,dbe,A,B,C):
         cations=self.cations
         anions=self.anions
-        chem_groups_cat=dbe.phases[phase_name].model_hints['mqmqa']['chemical_groups']['cations']
-        chem_groups_an=dbe.phases[phase_name].model_hints['mqmqa']['chemical_groups']['anions']
+        chem_groups_cat=dbe.phases[self.phase_name].model_hints['mqmqa']['chemical_groups']['cations']
+        chem_groups_an=dbe.phases[self.phase_name].model_hints['mqmqa']['chemical_groups']['anions']
         in_lis=[A,B,C]
         if set(in_lis).issubset(cations) is True:
             chem_lis=[i for i in in_lis if chem_groups_cat[i]!=chem_groups_cat[A]]
@@ -602,7 +651,6 @@ class ModelMQMQA(ModelBase):
         ξ = self.ξ
         cations=self.cations
         anions=self.anions
-        X_a_Xb_tern=1
         pair_query_1 = dbe._parameters.search(
             (where('phase_name') == self.phase_name) & \
             (where('parameter_type') == "EXMG") & \
@@ -611,22 +659,26 @@ class ModelMQMQA(ModelBase):
         pair_query_3 = dbe._parameters.search(
             (where('phase_name') == self.phase_name) & \
             (where('parameter_type') == "EXMQ") & \
-            (where('parameter') == 1) & \
+            (where('diffusing_species') != v.Species(None)) & \
             (where('constituent_array').test(self._mixing_test))
         )
-
-        indi_que_3=[i['parameter_order'] for i in pair_query_3]
+#        print(pair_query_1,pair_query_3)
+        indi_que_3=[i['parameter_order'] for i in pair_query_3 ]
+#        print(pair_query_3)
         chem_groups=dbe.phases[self.phase_name].model_hints['mqmqa']['chemical_groups']
         X_ex=S.Zero
-        X_tern=S.Zero
+        X_tern_original=S.One
         for param in pair_query_1:
             index=param['parameter_order']
             coeff=param['parameter']
             diff=[i for i in indi_que_3 if 0<(i-index)<=4]
-
+            X_ex_1=S.One
+            X_a_Xb_tern=S.One
+            X_ex_2=S.Zero            
+#            print(index,diff)
+#            print(type(param['diffusing_species']))
             if len(diff)==0:
-                X_ex+=self.excess_mixing_t1(dbe,param['constituent_array'])*coeff
-
+                X_ex_0=1            
             for parse in pair_query_3:
                 exp=parse['parameter']
                 diff_spe=parse['diffusing_species']
@@ -637,36 +689,43 @@ class ModelMQMQA(ModelBase):
                 B=cons_cat[1]
                 X=cons_an[0]
                 Y=cons_an[1]
-
-                if 0<(parse['parameter_order']-index)<=2 and diff_spe in cons_cat:
-                    X_ex_1=coeff*(self.X_1_2(dbe,cons_arr,diff_spe))**exp
-                    X_ex+=self.excess_mixing_t1(dbe,cons_arr)*X_ex_1
-
-                elif diff_spe in cations and diff_spe not in cons_cat and \
-                0<(parse['parameter_order']-index)<=2:
-                    X_tern_diff_spe=parse['parameter_order']-index
-                    X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe])**exp
+                if 0<(parse['parameter_order']-index)<=4 and diff_spe in cons_cat:
+                    X_ex_1*=(self.X_1_2(dbe,cons_arr,diff_spe))**exp
+                    X_ex_0=1
+#                elif diff_spe in cations and diff_spe not in cons_cat and \
+#                0<(parse['parameter_order']-index)<=2:
+#                    X_tern_diff_spe=parse['parameter_order']-index
+#                    X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp
+    
+    
 ####Maybe make X_1_2 its own functions and make a different one for X12 ternary
 ###Or maybe switch it up here?
 
                 elif diff_spe in cations and diff_spe not in cons_cat \
-                and 2<(parse['parameter_order']-index)<=4 \
-                and self.id_symm(dbe,A,B,diff_spe)==diff_spe:
+                and 0<(parse['parameter_order']-index)<=4 \
+                and self.id_symm(dbe,A,B,diff_spe)==diff_spe and exp!=0:
+                    if 0<(parse['parameter_order']-index)<=2:
+                        X_tern_diff_spe=parse['parameter_order']-index
+                        print('made it here',X_tern_diff_spe)
+                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp               
                     X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
                     *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/w(X))\
                     *(1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)
 
                 elif diff_spe in cations and diff_spe not in cons_cat \
-                and 2<(parse['parameter_order']-index)<=4 \
+                and 0<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,A,B,diff_spe)==0:
-                    X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
-                    *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/w(X))\
-                    *(1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)
+                    if 0<(parse['parameter_order']-index)<=2:
+                        X_tern_diff_spe=parse['parameter_order']-index
+                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp
 
-
+                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(diff_spe,X)/w(X))\
+                    *((1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)))
+#                    print(X_ex_2,coeff,self.excess_mixing_t1(dbe,param['constituent_array']))
                 elif diff_spe in cations and diff_spe not in cons_cat \
                 and 2<(parse['parameter_order']-index)<=4 \
-                and self.id_symm(dbe,A,B,diff_spe)==B:
+                and self.id_symm(dbe,A,B,diff_spe)==B and exp!=0:
+                    print('made it here')
                     X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
                     *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,A,B)))\
                     *(1-(ξ(A,X)/(w(X)*self.K_1_2(dbe,A,B))))**(exp-1)
@@ -676,14 +735,14 @@ class ModelMQMQA(ModelBase):
 
                 elif diff_spe in anions and diff_spe not in cons_an \
                 and 2<(parse['parameter_order']-index)<=4 \
-                and self.id_symm(dbe,A,B,diff_spe)==diff_spe:
+                and self.id_symm(dbe,A,B,diff_spe)==diff_spe and exp!=0:
                     X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
                     *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/w(X))\
                     *(1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)
 
                 elif diff_spe in anions and diff_spe not in cons_an \
                 and 2<(parse['parameter_order']-index)<=4 \
-                and self.id_symm(dbe,A,B,diff_spe)==0:
+                and self.id_symm(dbe,A,B,diff_spe)==0 and exp!=0:
                     X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
                     *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/w(X))\
                     *(1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)
@@ -691,13 +750,91 @@ class ModelMQMQA(ModelBase):
 
                 elif diff_spe in anions and diff_spe not in cons_an \
                 and 2<(parse['parameter_order']-index)<=4 \
-                and self.id_symm(dbe,A,B,diff_spe)==X:
+                and self.id_symm(dbe,A,B,diff_spe)==X and exp!=0:
                     X_ex+=self.excess_mixing_t1(dbe,cons_arr)\
                     *X_a_Xb_tern*coeff*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,A,B)))\
                     *(1-(ξ(A,X)/(w(X)*self.K_1_2(dbe,A,B))))**(exp-1)
+#            print(X_ex_2,coeff,X_ex_0,X_ex_1) 
+            if X_ex_2==0:
+                X_ex_2+=1
+
+            X_ex+=self.excess_mixing_t1(dbe,param['constituent_array'])*coeff*X_ex_0*X_ex_1*X_ex_2
 
         return X_ex/self.normalization
 
+    def shift_reference_state(self, reference_states, dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):
+        """
+        Add new attributes for calculating properties w.r.t. an arbitrary pure element reference state.
+
+        Parameters
+        ----------
+        reference_states : Iterable of ReferenceState
+            Pure element ReferenceState objects. Must include all the pure
+            elements defined in the current model.
+        dbe : Database
+            Database containing the relevant parameters.
+        output : Iterable, optional
+            Parameters to subtract the ReferenceState from, defaults to ('GM', 'HM', 'SM', 'CPM').
+        contrib_mods : Mapping, optional
+            Map of {model contribution: new value}. Used to adjust the pure
+            reference model contributions at the time this is called, since
+            the `models` attribute of the pure element references are
+            effectively static after calling this method.
+        fmt_str : str, optional
+            String that will be formatted with the `output` parameter name.
+            Defaults to "{}R", e.g. the transformation of 'GM' -> 'GMR'
+
+        """
+        # Error checking
+        # We ignore the case that the ref states are overspecified (same ref states can be used in different models w/ different active pure elements)
+        model_pure_elements = set(get_pure_elements(dbe, self.components))
+        refstate_pure_elements_list = get_pure_elements(dbe, [r.species for r in reference_states])
+        refstate_pure_elements = set(refstate_pure_elements_list)
+        if len(refstate_pure_elements_list) != len(refstate_pure_elements):
+            raise DofError("Multiple ReferenceState objects exist for at least one pure element: {}".format(refstate_pure_elements_list))
+        if not refstate_pure_elements.issuperset(model_pure_elements):
+            raise DofError("Non-existent ReferenceState for pure components {} in {} for {}".format(model_pure_elements.difference(refstate_pure_elements), self, self.phase_name))
+
+        contrib_mods = contrib_mods or {}
+
+        def _pure_element_test(constituent_array):
+            all_comps = set()
+            for sublattice in constituent_array:
+                if len(sublattice) != 1:
+                    return False
+                all_comps.add(sublattice[0].name)
+            pure_els = all_comps.intersection(model_pure_elements)
+            return len(pure_els) == 1
+
+        # Remove interactions from a copy of the Database, avoids any element/VA interactions.
+        endmember_only_dbe = copy.deepcopy(dbe)
+        endmember_only_dbe._parameters.remove(~where('constituent_array').test(_pure_element_test))
+        reference_dict = {out: [] for out in output}  # output: terms list
+        for ref_state in reference_states:
+            if ref_state.species not in self.components:
+                continue
+            mod_pure = self.__class__(endmember_only_dbe, [ref_state.species, v.Species('VA')], ref_state.phase_name, parameters=self._parameters_arg)
+            # apply the modifications to the Models
+            for contrib, new_val in contrib_mods.items():
+                mod_pure.models[contrib] = new_val
+            # set all the free site fractions to one, this should effectively delete any mixing terms spuriously added, e.g. idmix
+            site_frac_subs = {sf: 1 for sf in mod_pure.ast.free_symbols if isinstance(sf, v.SiteFraction)}
+            for mod_key, mod_val in mod_pure.models.items():
+                mod_pure.models[mod_key] = mod_val.subs(site_frac_subs)
+            moles = self.moles(ref_state.species)
+            # get the output property of interest, substitute the fixed state variables (e.g. T=298.15) and add the pure element moles weighted term to the list of terms
+            # substitution of fixed state variables has to happen after getting the attribute in case there are any derivatives involving that state variable
+            for out in reference_dict.keys():
+                mod_out = getattr(mod_pure, out).subs(ref_state.fixed_statevars)
+                reference_dict[out].append(mod_out*moles)
+
+        # set the attribute on the class
+        for out, terms in reference_dict.items():
+            reference_contrib = Add(*terms)
+            referenced_value = getattr(self, out) - reference_contrib
+            setattr(self, fmt_str.format(out), referenced_value)
+  
+    
     def build_phase(self, dbe):
         """
         Generate the symbolic form of all the contributions to this phase.
@@ -736,3 +873,93 @@ class ModelMQMQA(ModelBase):
             # Can't use xreplace on a float
             pass
         return obj
+
+    def _array_validity(self, constituent_array):
+        """
+        Return True if the constituent_array contains only active species of the current Model instance.
+        """
+        if len(constituent_array) != len(self.constituents):
+            return False
+        for param_sublattice, model_sublattice in zip(constituent_array, self.constituents):
+            if not (set(param_sublattice).issubset(model_sublattice) or (param_sublattice[0] == v.Species('*'))):
+                return False
+        return True    
+    
+    def _interaction_test(self, constituent_array):
+        """
+        Return True if the constituent_array is valid and has more than one
+        species in at least one sublattice.
+        """
+        if not self._array_validity(constituent_array):
+            return False
+        return any([len(sublattice) > 1 for sublattice in constituent_array])    
+
+    def _build_reference_model(self, preserve_ideal=True):
+        """
+        Build a reference_model for the current model, referenced to the endmembers.
+
+        Parameters
+        ----------
+        dbe : Database
+        preserve_ideal : bool, optional
+            If True, the default, the ideal mixing energy will not be subtracted out.
+
+
+        See Also
+        --------
+        Model.reference_model
+
+        Notes
+        -----
+        Requires that self.build_phase has already been called.
+
+        """
+        endmember_only_dbe = copy.deepcopy(self._dbe)
+        endmember_only_dbe._parameters.remove(where('constituent_array').test(self._interaction_test))
+        mod_endmember_only = self.__class__(endmember_only_dbe, self.components, self.phase_name, parameters=self._parameters_arg)
+        if preserve_ideal:
+            mod_endmember_only.models['idmix'] = 0
+        self._reference_model = mod_endmember_only
+        if self.models.get('ord', S.Zero) != S.Zero:
+                for k in self.reference_model.models.keys():
+                    self._reference_model.models[k] = nan    
+    
+    @property
+    def reference_model(self):
+        """
+        Return a Model containing only energy contributions from endmembers.
+
+        Returns
+        -------
+        Model
+
+        Notes
+        -----
+        The reference_model is defined such that subtracting it from the model
+        will set the energy of the endmembers for the _MIX properties of this
+        class to zero. The _MIX properties generated here allow users to see
+        mixing energies on the internal degrees of freedom of this phase.
+
+        The reference_model AST can be modified in the same way as the current Model.
+
+        Ideal mixing is always added to the AST, we need to set it to zero here
+        so that it's not subtracted out of the reference. However, we have this
+        option so users can just see the mixing properties in terms of the
+        parameters.
+
+        If the current model has an ordering energy as part of a partitioned
+        model, then this special reference state is not well defined because
+        the endmembers in the model have energetic contributions from
+        the ordered endmember energies and the disordered mixing energies.
+        Therefore, this reference state cannot be used sensibly for partitioned
+        models and the energies of all reference_model.models are set to nan.
+
+        Since build_reference_model requires that Database instances are copied
+        and new instances of Model are created, it can be computationally
+        expensive to build the reference Model by default. This property delays
+        building the reference_model until it is used.
+
+        """
+        if self._reference_model is None:
+            self._build_reference_model()
+        return self._reference_model
