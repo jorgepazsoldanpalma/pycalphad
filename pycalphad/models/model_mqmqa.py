@@ -464,7 +464,7 @@ class ModelMQMQA(ModelBase):
                 for j, X in enumerate(anions):
                     for Y in anions[j:]:
                         term1=((abs(X.charge)/self.Z(dbe,X,A,B,X,Y))+(abs(Y.charge)/self.Z(dbe,Y,A,B,X,Y)))**(-1)
-#                        print('first term',term1)
+#                        print('first term',term1,A,B,X,Y)
                         term2=(abs(X.charge)*self.Z(dbe,A,A,A,X,X)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[A,A,X,X]*2/self.Z(dbe,A,A,A,X,X))
 #                        print('second term',term2)
                         term3=(abs(X.charge)*self.Z(dbe,B,B,B,X,X)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[B,B,X,X]*2/self.Z(dbe,B,B,B,X,X))
@@ -472,7 +472,7 @@ class ModelMQMQA(ModelBase):
                         term4=(abs(Y.charge)*self.Z(dbe,A,A,A,Y,Y)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[A,A,Y,Y]*2/self.Z(dbe,A,A,A,Y,Y))
 #                        print('fourth term',term4)                        
                         term5=(abs(Y.charge)*self.Z(dbe,B,B,B,Y,Y)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[B,B,Y,Y]*2/self.Z(dbe,B,B,B,Y,Y))
-#                        print('fifth term',term5)                                                
+#                        print('fifth term',term5) 
                         final_term=term1*(term2+term3+term4+term5)
 #                        print(p(A,B,X,Y))
                         surf+=p(A,B,X,Y)*final_term
