@@ -12,7 +12,7 @@ Careful of a gotcha:  `obj.setParseAction` modifies the object in place but call
 
 
 """
-
+from typing import Dict, List, Tuple
 import re
 import numpy as np
 import itertools
@@ -202,8 +202,21 @@ class Endmember():
     def insert(self, dbf: Database, phase_name: str, constituent_array: [[str]], gibbs_coefficient_idxs: [int]):
         dbf.add_parameter('G', phase_name, constituent_array,
                           0, self.expr(gibbs_coefficient_idxs), force_insert=False)
+        
+    #Added from Brandon's branch 02/10/22
+@dataclass
+class EndmemberQKTO(Endmember):
+    stoichiometric_factor: float
+    chemical_group: int
 
-
+    def insert(self, dbf: Database, phase_name: str, constituent_array: List[List[str]], gibbs_coefficient_idxs: List[int]):
+        dbf.add_parameter('G', phase_name, constituent_array, 0, self.expr(gibbs_coefficient_idxs), force_insert=False)
+        # Most databases in the wild use stoichiometric factors of unity,
+        # so we're avoiding the complexity of non-unity factors for now.
+        if not np.isclose(self.stoichiometric_factor, 1.0):
+            raise ValueError(f"QKTO endmembers with stoichiometric factors other than 1 are not yet supported. Got {self.stoichiometric_factor} for {self}")
+    #End from Brandon's branch 02/10/22     
+        
 @dataclass
 class EndmemberMagnetic(Endmember):
     curie_temperature: float
@@ -243,22 +256,22 @@ class EndmemberAqueous(Endmember):
 
 @dataclass
 class ExcessBase:
-    interacting_species_idxs: [int]
+    interacting_species_idxs: List[int]
 
-    def _map_const_idxs_to_subl_idxs(self, num_subl_species: [int]) -> [[int]]:
+    def _map_const_idxs_to_subl_idxs(self, num_subl_species: List[int]) -> List[List[int]]:
         """
         Converts from one-indexed linear phase species indices to zero-indexed
         sublattice species indices.
 
         Parameters
         ----------
-        num_subl_species: [int]
+        num_subl_species: List[int]
             Number of species in each sublattice, i.e. [1, 2, 1] could
             correspond to a sublattice model of [['A'], ['A', 'B'], ['C']]
 
         Returns
         -------
-        [[int]] - a list of species index lists
+        List[List[int]] - a list of species index lists
 
         Examples
         --------
@@ -290,7 +303,7 @@ class ExcessBase:
         assert all(len(subl) > 0 for subl in subl_species_idxs)
         return subl_species_idxs
 
-    def constituent_array(self, phase_constituents: [[str]]) -> [[str]]:
+    def constituent_array(self, phase_constituents: List[List[str]]) -> List[List[str]]:
         """
         Return the constituent array of this interaction using the entire phase
         sublattice model.
@@ -308,11 +321,12 @@ class ExcessBase:
         """
         num_subl_species = [len(subl) for subl in phase_constituents]
         subl_species_idxs = self._map_const_idxs_to_subl_idxs(num_subl_species)
+#        print('Maybe it is here?','list for loop',[phase_constituents[subl_idx] for subl_idx, subl in enumerate(subl_species_idxs)],'phase constituents',phase_constituents)
         return [[phase_constituents[subl_idx][idx] for idx in subl] for subl_idx, subl in enumerate(subl_species_idxs)]
 
-    def insert(self, dbf: Database, phase_name: str, phase_constituents: [[str]], excess_coefficient_idxs: [int]):
+    def insert(self, dbf: Database, phase_name: str, phase_constituents: List[List[str]], excess_coefficient_idxs: List[int]):
         raise NotImplementedError(f"Subclass {type(self).__name__} of ExcessBase must implement `insert` to add the phase, constituents and parameters to the Database.")
-
+###This was changed in 02-23-2022
 
 @dataclass
 class ExcessRKM(ExcessBase):
@@ -358,11 +372,11 @@ class ExcessRKMMagnetic(ExcessBase):
         dbf.add_parameter('TC', phase_name, const_array, self.parameter_order, self.curie_temperature, force_insert=False)
         dbf.add_parameter('BMAG', phase_name, const_array, self.parameter_order, self.magnetic_moment, force_insert=False)
 
-
+    #Added from Brandon's branch 02/10/22
 @dataclass
 class ExcessQKTO(ExcessBase):
-    interacing_species_type: [int]
-    coefficients: [float]
+    exponents: List[int]
+    coefficients: List[float]
 
     def expr(self, indices):
         """Return an expression for the energy in this temperature interval"""
@@ -371,55 +385,46 @@ class ExcessQKTO(ExcessBase):
         energy += sum([C*EXCESS_TERMS[i] for C, i in zip(self.coefficients, indices)])
         return energy
 
-    def _odd_species_out(self, phase_constituents):
-        # this assumes that the same species is the same type regardless of
-        # sublattice. See also the comment in ExcessQKTO.insert, which
-        # requires that the species of the different type is identified by
-        # species (i.e. no sublattice information).
+    @staticmethod  # So it can be in the style of a Database() method
+    def _database_add_parameter(
+        self, param_type, phase_name, constituent_array,
+        parameter, exponents,
+        ref=None, force_insert=True
+        ):
+        species_dict = {s.name: s for s in self.species}
+#        print('Jorge',phase_name, constituent_array,
+#        parameter, exponents)
+        new_parameter = {
+            'phase_name': phase_name,
+            'constituent_array': tuple(tuple(species_dict.get(s.upper(), v.Species(s)) for s in xs) for xs in constituent_array),  # must be hashable type
+            'parameter_type': param_type,
+            'parameter': parameter,
+            'exponents': exponents,
+            'reference': ref,
+        }
+        if force_insert:
+            self._parameters.insert(new_parameter)
+        else:
+            self._parameter_queue.append(new_parameter)
 
-        # flatten phase constituents so they map to the linear indices
-        linear_constituents = list(itertools.chain(*phase_constituents))
-        species_groups = {}
-        for linear_idx, group_id in zip(self.interacting_species_idxs, self.interacing_species_type):
-            constit = linear_constituents[linear_idx - 1]  # linear_idx is one-indexed
-            species_groups[group_id] = species_groups.get(group_id, set()) | {constit}
-        assert len(species_groups) <= 2, f"A maximum of two species group types are supported, got group ids: {list(species_groups.keys())} with {species_groups}."
-        if len(species_groups.keys()) == 1:
-            return None
-        # find the group that contains the "odd one out" species
-        odd_species = [tuple(group)[0] for group in species_groups.values() if len(group) == 1][0]
-        odd_species_group_membership_ids = [group_id for group_id, group in species_groups.items() if odd_species in group]
-        assert len(odd_species_group_membership_ids) == 1, f"The odd species out ({odd_species}) can only belong to one element group, but it is found in element groups: {odd_species_group_membership_ids}."
-        return odd_species
-
-    def insert(self, dbf: Database, phase_name: str, phase_constituents: [str], excess_coefficient_idxs: [int]):
-        # we need to store the element types for each parameter, since the same
-        # constituents can have different types per parameter
-        # one option might be to use a diffusing species to indicate the odd
-        # species out, if it exists, however for multicomponent interactions,
-        # (e.g. with just 4 elements) we can have two elements of each type
-        # and then the diffusing species assumption breaks. So we would need to
-        # extend dbf._parameters to include some metadata, since the element
-        # types need to stay with the parameter. For now, we just assert that
-        # there are no interactions of this type and we just have one different
-        # species
-        odd_species = self._odd_species_out(phase_constituents)
+    def insert(self, dbf: Database, phase_name: str, phase_constituents: List[str], excess_coefficient_idxs: List[int]):
+        # TODO: does this use the chemical groups in the generalized Kohler-Toop formalism?
         const_array = self.constituent_array(phase_constituents)
-        # TODO: can higher order parameters be specified? Is this something I'm
-        # missing in the DAT file somewhere?
-        param_order = 0
-        dbf.add_parameter('L', phase_name, const_array, param_order,
-                          self.expr(excess_coefficient_idxs),
-                          diffusing_species=odd_species, force_insert=False)
-
-
+        
+        exponents = [exponent - 1 for exponent in self.exponents]  # For some reason, an exponent of 1 really means an exponent of zero...
+        self._database_add_parameter(
+            dbf, "QKT", phase_name, const_array,
+            self.expr(excess_coefficient_idxs), exponents, 
+            force_insert=False)
+        #End from Brandon's branch 02/10/22
+#02-23-2022 PhaseBase class has been changed
 @dataclass
 class PhaseBase:
     phase_name: str
     phase_type: str
-    endmembers: [Endmember]
+    endmembers: List[Endmember]
 
-    def insert(self, dbf: Database, pure_elements: [str], gibbs_coefficient_idxs: [int], excess_coefficient_idxs: [int]):
+    def insert(self, dbf: Database, pure_elements: List[str], gibbs_coefficient_idxs: List[int], excess_coefficient_idxs: List[int]):
         """Enter this phase and its parameters into the Database.
 
         This method should call:
@@ -430,7 +435,6 @@ class PhaseBase:
 
         """
         raise NotImplementedError(f"Subclass {type(self).__name__} of PhaseBase must implement `insert` to add the phase, constituents and parameters to the Database.")
-
 
 @dataclass
 class Phase_Stoichiometric(PhaseBase):
@@ -461,6 +465,7 @@ class Phase_CEF(PhaseBase):
     excess_parameters: [ExcessBase]
     magnetic_afm_factor: float
     magnetic_structure_factor: float
+
     def insert(self, dbf: Database, pure_elements: [str], gibbs_coefficient_idxs: [int], excess_coefficient_idxs: [int]):
         model_hints = {}
         if self.magnetic_afm_factor is not None and self.magnetic_structure_factor is not None:
@@ -473,14 +478,31 @@ class Phase_CEF(PhaseBase):
             # model divides by the AFM factor (-1/3). We convert the AFM
             # factor to the version used in the TDB/Model.
             model_hints['ihj_magnetic_afm_factor'] = -1/self.magnetic_afm_factor
-        if len(self.excess_parameters) == 0:
-            pass  # no excess parameters: no model hints
-        elif all(isinstance(xs, (ExcessQKTO, ExcessRKMMagnetic)) for xs in self.excess_parameters):
+
+        if all(isinstance(xs, (ExcessQKTO, ExcessRKMMagnetic)) for xs in self.excess_parameters):
             # We have only QKTO excess models, add model hint.
             model_hints['excess_model'] = ('KOHLER_TOOP', None, None, None)
         elif any(isinstance(xs, (ExcessQKTO)) for xs in self.excess_parameters) and any(isinstance(xs, (ExcessRKM)) for xs in self.excess_parameters):
             raise ValueError("ExcessQKTO and ExcessRKM parameters found, but they cannot co-exist.")
-
+        
+        #Added from Brandon's branch 02/10/22
+        # Try adding model hints for chemical groups from endmembers
+        chemical_groups = {}
+        for endmember in self.endmembers:
+            if hasattr(endmember, "chemical_group"):
+                endmember_species = endmember.species(pure_elements)
+                # make the assumption that there's only one species in this endmember
+                # currently, only QKTO model endmembers supply chemical groups
+                # and QKTO models in the DAT can only have one sublattice.
+                species = endmember_species[0]
+                if species in chemical_groups:
+                    raise ValueError(f"Species {species} is already present in the chemical groups dictionary for phase {self.phase_name}  with endmembers {self.endmembers}.")
+                else:
+                    chemical_groups[species] = endmember.chemical_group
+        if len(chemical_groups.keys()) > 0:
+            model_hints["chemical_groups"] = chemical_groups            
+        #End from Brandon's branch 02/10/22
+            
         dbf.add_phase(self.phase_name, model_hints=model_hints, sublattices=self.subl_ratios)
 
         # This does two things:
@@ -504,11 +526,16 @@ class Phase_CEF(PhaseBase):
             # it's working. This assumes that all constituents are present in
             # endmembers (i.e. there are no endmembers that are implicit).
 
+
+
             constituents = [[] for _ in range(len(self.subl_ratios))]
             for endmember in self.endmembers:
                 for subl, const_subl in zip(endmember.constituent_array(), constituents):
                     const_subl.extend(subl)
-            self.constituent_array = [np.unique(ca).tolist() for ca in constituents]
+#######################Brandon's 02-25-22######################################################
+            self.constituent_array = constituents  # Be careful to preserve ordering here, since the mapping from 
+#######################Brandon's 02-25-22#######################################################    
+#species indices to species depends on the order of this
         # TODO:
         # constituent array now has all the constituents in every sublattice,
         # e.g. it could be [['A', 'B'], ['D', 'B']]
@@ -544,7 +571,6 @@ class Phase_CEF(PhaseBase):
         # internally and this is thrown away by the parser currently.
         for excess_param in self.excess_parameters:
             excess_param.insert(dbf, self.phase_name, self.constituent_array, excess_coefficient_idxs)
-
 
 def rename_element_charge(element, charge):
     """We use the _ to separate so we have something to split on."""
@@ -722,14 +748,13 @@ class Phase_SUBQ(PhaseBase):
         # order to make the species entered in the expected way (`CL-1`).
         anion_el_chg_pairs = list(zip(self.subl_2_const, [-1*c for c in self.subl_2_charges]))
         cations = [rename_element_charge(el, chg) for el, chg in cation_el_chg_pairs]
-
         anions = [rename_element_charge(el, chg) for el, chg in anion_el_chg_pairs]
         tot_ele=cation_el_chg_pairs+anion_el_chg_pairs
 
         # Add the "pure" (renamed) species to the database so the phase constituents can be added
         dbf.species.update(map(_species, cation_el_chg_pairs))
         dbf.species.update(map(_species, anion_el_chg_pairs))
-       
+
         # Second: add the phase and phase constituents
         # TODO: model hints to identify this phase as MQMQA
         # TODO: can model hints give us the map we need from the mangled
@@ -897,6 +922,15 @@ def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_s
     return Endmember(species_name, gibbs_eq_type, stoichiometry_pure_elements, intervals)
 
 
+def parse_endmember_qkto(toks: TokenParser, num_pure_elements: int, num_gibbs_coeffs: int):
+    # add an extra "pure element" to parse the charge
+    em = parse_endmember(toks, num_pure_elements, num_gibbs_coeffs)
+    # TODO: needs special QKTO endmember to store these, the stoichiometric factors and chemical groups should be parsed into model hints or something...
+    stoichiometric_factor = toks.parse(float)
+    chemical_group = toks.parse(int)
+
+    return EndmemberQKTO(em.species_name, em.gibbs_eq_type, em.stoichiometry_pure_elements, em.intervals, stoichiometric_factor, chemical_group)
+
 def parse_endmember_aqueous(toks: TokenParser, num_pure_elements: int, num_gibbs_coeffs: int):
     # add an extra "pure element" to parse the charge
     em = parse_endmember(toks, num_pure_elements + 1, num_gibbs_coeffs)
@@ -1022,11 +1056,11 @@ def parse_excess_qkto(toks, num_excess_coeffs):
         if num_interacting_species == 0:
             break
         interacting_species_idxs = toks.parseN(num_interacting_species, int)
-        interacing_species_type = toks.parseN(num_interacting_species, int)  # species type, for identify the asymmetry
+        exponents = toks.parseN(num_interacting_species, int)
         coefficients = toks.parseN(num_excess_coeffs, float)
-        excess_terms.append(ExcessQKTO(interacting_species_idxs, interacing_species_type, coefficients))
+        
+        excess_terms.append(ExcessQKTO(interacting_species_idxs, exponents, coefficients))
     return excess_terms
-
 
 def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, num_const):
     is_magnetic_phase_type = len(phase_type) == 5 and phase_type[4] == 'M'
@@ -1045,13 +1079,10 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
     for _ in range(num_const):
         if sanitized_phase_type == 'PITZ':
             endmembers.append(parse_endmember_aqueous(toks, num_pure_elements, num_gibbs_coeffs))
+        elif sanitized_phase_type in ('QKTO',):
+            endmembers.append(parse_endmember_qkto(toks, num_pure_elements, num_gibbs_coeffs))
         else:
             endmembers.append(parse_endmember(toks, num_pure_elements, num_gibbs_coeffs))
-        if sanitized_phase_type in ('QKTO',):
-            # TODO: is this correct?
-            # there's two additional numbers. they seem to always be 1.000 and 1, so we'll just throw them away
-            toks.parse(float)
-            toks.parse(int)
 
     # defining sublattice model
     if sanitized_phase_type in ('SUBL',):

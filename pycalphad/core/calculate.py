@@ -17,6 +17,7 @@ from pycalphad.core.utils import endmember_matrix, extract_parameters, \
     filter_phases, instantiate_models, point_sample, \
     unpack_components, unpack_condition, unpack_kwarg
 from pycalphad.models.model_mqmqa import ModelMQMQA
+from pycalphad.model import Model
 
 
 @cacheit
@@ -337,9 +338,12 @@ def calculate(dbf, comps, phases, mode=None, output='GM', fake_points=False, bro
                                             output=output, callables=callables,
                                             build_gradients=False, build_hessians=False,
                                             verbose=kwargs.pop('verbose', False))
-    else:
+####Jorge edited this line out 03-17-2022. Might be important? But need to consult with Brandon a little more#####        
+#    else:
         # phase_records were provided, instantiated models must also be provided by the caller
-        models = model
+#        models = model
+
+#################################################################################################################
         if not isinstance(models, Mapping):
             raise ValueError("A dictionary of instantiated models must be passed to `equilibrium` with the `model` argument if the `phase_records` argument is used.")
         active_phases_without_models = [name for name in active_phases if not isinstance(models.get(name), Model)]
