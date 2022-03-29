@@ -392,14 +392,17 @@ class ExcessQKTO(ExcessBase):
         ref=None, force_insert=True
         ):
         species_dict = {s.name: s for s in self.species}
-#        print('Jorge',phase_name, constituent_array,
-#        parameter, exponents)
+####****03-22-2022****###
+####Added diffusing species here since it kept giving me errors for it#####
+        
         new_parameter = {
             'phase_name': phase_name,
-            'constituent_array': tuple(tuple(species_dict.get(s.upper(), v.Species(s)) for s in xs) for xs in constituent_array),  # must be hashable type
+            'constituent_array':tuple(tuple(species_dict.get(s.upper(), v.Species(s)) for s in xs) for xs in constituent_array),  # must be hashable type
             'parameter_type': param_type,
+            'parameter_order' : 100,
             'parameter': parameter,
             'exponents': exponents,
+            'diffusing_species': None,
             'reference': ref,
         }
         if force_insert:
@@ -408,7 +411,7 @@ class ExcessQKTO(ExcessBase):
             self._parameter_queue.append(new_parameter)
 
     def insert(self, dbf: Database, phase_name: str, phase_constituents: List[str], excess_coefficient_idxs: List[int]):
-        # TODO: does this use the chemical groups in the generalized Kohler-Toop formalism?
+        # TODO: does this use the ] groups in the generalized Kohler-Toop formalism?
         const_array = self.constituent_array(phase_constituents)
         
         exponents = [exponent - 1 for exponent in self.exponents]  # For some reason, an exponent of 1 really means an exponent of zero...
@@ -479,9 +482,19 @@ class Phase_CEF(PhaseBase):
             # factor to the version used in the TDB/Model.
             model_hints['ihj_magnetic_afm_factor'] = -1/self.magnetic_afm_factor
 
-        if all(isinstance(xs, (ExcessQKTO, ExcessRKMMagnetic)) for xs in self.excess_parameters):
+##########******03-22-2022******########
+#####Beginning to change this section in order to add model_hints to QKTO#####
+#####I made need this mode_hints in order to determine symmetry issues######
+###and use Kohler_toop extrapolation####
+        if all(isinstance(xs, ExcessRKMMagnetic) for xs in self.excess_parameters):
             # We have only QKTO excess models, add model hint.
             model_hints['excess_model'] = ('KOHLER_TOOP', None, None, None)
+            
+        if all(isinstance(xs, ExcessQKTO) for xs in self.excess_parameters):
+            # We have only QKTO excess models, add model hint.
+            model_hints['qkto']={}        
+##########*************************########
+
         elif any(isinstance(xs, (ExcessQKTO)) for xs in self.excess_parameters) and any(isinstance(xs, (ExcessRKM)) for xs in self.excess_parameters):
             raise ValueError("ExcessQKTO and ExcessRKM parameters found, but they cannot co-exist.")
         
@@ -500,8 +513,12 @@ class Phase_CEF(PhaseBase):
                 else:
                     chemical_groups[species] = endmember.chemical_group
         if len(chemical_groups.keys()) > 0:
-            model_hints["chemical_groups"] = chemical_groups            
+            ######******03-22-2022*******######
+            
+            model_hints['qkto']["chemical_groups"] = chemical_groups 
         #End from Brandon's branch 02/10/22
+        if self.phase_type=='QKTO': 
+            model_hints['qkto']['type']=self.phase_type
             
         dbf.add_phase(self.phase_name, model_hints=model_hints, sublattices=self.subl_ratios)
 
@@ -882,7 +899,6 @@ def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_s
         # special case for stoichiometric phases, this is a dummy species, skip it
         _ = toks.parse(str)
     gibbs_eq_type = toks.parse(int)
-#    print(species_name,gibbs_eq_type)
     # Determine how to parse the type of thermodynamic option
     has_magnetic = gibbs_eq_type > 12
     gibbs_eq_type_reduced = (gibbs_eq_type - 12) if has_magnetic else gibbs_eq_type
@@ -928,7 +944,6 @@ def parse_endmember_qkto(toks: TokenParser, num_pure_elements: int, num_gibbs_co
     # TODO: needs special QKTO endmember to store these, the stoichiometric factors and chemical groups should be parsed into model hints or something...
     stoichiometric_factor = toks.parse(float)
     chemical_group = toks.parse(int)
-
     return EndmemberQKTO(em.species_name, em.gibbs_eq_type, em.stoichiometry_pure_elements, em.intervals, stoichiometric_factor, chemical_group)
 
 def parse_endmember_aqueous(toks: TokenParser, num_pure_elements: int, num_gibbs_coeffs: int):
@@ -1058,7 +1073,6 @@ def parse_excess_qkto(toks, num_excess_coeffs):
         interacting_species_idxs = toks.parseN(num_interacting_species, int)
         exponents = toks.parseN(num_interacting_species, int)
         coefficients = toks.parseN(num_excess_coeffs, float)
-        
         excess_terms.append(ExcessQKTO(interacting_species_idxs, exponents, coefficients))
     return excess_terms
 
@@ -1128,6 +1142,7 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
             excess_parameters.extend(parse_excess_magnetic_parameters(toks))
         excess_parameters.extend(parse_excess_parameters(toks, num_excess_coeffs))
     elif sanitized_phase_type in ('QKTO',):
+#        print('Jorge here',toks, num_excess_coeffs)
         excess_parameters = parse_excess_qkto(toks, num_excess_coeffs)
     return Phase_CEF(phase_name, phase_type, endmembers, subl_ratios, constituent_array, endmember_constituent_idxs, excess_parameters, magnetic_afm_factor=magnetic_afm_factor, magnetic_structure_factor=magnetic_structure_factor)
 
@@ -1154,6 +1169,7 @@ def parse_phase(toks, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, nu
     """Dispatches to the correct parser depending on the phase type"""
     phase_name = toks.parse(str)
     phase_type = toks.parse(str)
+#    print('Jorge here',phase_name, phase_type)
     if phase_type in ('SUBQ', 'SUBG'):
 #        model_hints={}
 #        model_hints['mqmqa']={}
@@ -1186,8 +1202,21 @@ def parse_cs_dat(instring):
     num_gibbs_coeffs = len(header.gibbs_coefficient_idxs)
     num_excess_coeffs = len(header.excess_coefficient_idxs)
     # num_const = 0 is gas phase that isn't present, so skip it
+    
+####*****03-22-2022****###
+###This for loop has a mistake in it that did not let me read stoichometric phases###
+#    for i in header.list_soln_species_count:
+#        solution_phases = [parse_phase(toks, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, num_const) #for num_const in header.list_soln_species_count if num_const != 0]
+#        stoichiometric_phases = [parse_stoich_phase(toks, num_pure_elements, num_gibbs_coeffs) for _ in range(header.num_stoich_phases)]
+####*********###   
+####*****03-22-2022****###
+###Copy pasted the following lines from the PSU desktop and it seems to work###
+###For now I am working on the tdb conversion but it would be good to know why ###
+###a for loop over this approach was chosen ###
     solution_phases = [parse_phase(toks, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, num_const) for num_const in header.list_soln_species_count if num_const != 0]
-    stoichiometric_phases = [parse_stoich_phase(toks, num_pure_elements, num_gibbs_coeffs) for _ in range(header.num_stoich_phases)]
+    stoichiometric_phases = [parse_stoich_phase(toks, num_pure_elements, num_gibbs_coeffs) for _ in range(header.num_stoich_phases)]                           
+####*********###   
+                          
     # Comment block at the end surrounded by "#####..." tokens
     # This might be a convention rather than required, but is an easy enough check to change.
     if len(toks) > 0:

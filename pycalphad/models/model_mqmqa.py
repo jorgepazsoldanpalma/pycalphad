@@ -763,6 +763,7 @@ class ModelMQMQA:
         chem_groups=dbe.phases[self.phase_name].model_hints['mqmqa']['chemical_groups']
         X_ex=S.Zero
         X_tern_original=S.One
+        full=cations+anions
         for param in pair_query_1:
 #            print('parameter in query 1',param)
             index=param['parameter_order']
@@ -771,32 +772,23 @@ class ModelMQMQA:
             X_ex_1=S.One
             X_a_Xb_tern=S.One
             X_ex_2=S.Zero
-
+#            print(index,diff)
+#            print(type(param['diffusing_species']))
             if len(diff)==0:
                 X_ex_0=1
             for parse in pair_query_3:
                 exp=parse['parameter']
                 diff_spe=parse['diffusing_species']
                 cons_arr=parse['constituent_array']
-#                print('exponent',exp,coeff,parse['parameter_order'])
+#                print('exponent',exp,'parameter',coeff,'order',parse['parameter_order'],'index',index,'diffusing species',diff_spe)
                 cons_cat=cons_arr[0]
                 cons_an=cons_arr[1]
                 A=cons_cat[0]
                 B=cons_cat[1]
                 X=cons_an[0]
                 Y=cons_an[1]
-                Sub_ex_1=S.Zero
-                Sub_ex_2=S.Zero
-                if A!=B and X==Y:
-                    Sub_ex_1+=1
-                elif A==B and X!=Y:
-                    Sub_ex_2+=1   
-#                print('JORGE TEST!',A,B,X,Y,Sub_ex_1,Sub_ex_2)
                 if 0<(parse['parameter_order']-index)<=4 and diff_spe in cons_cat:
                     X_ex_1*=(self.X_1_2(dbe,cons_arr,diff_spe))**exp
-#                    print(coeff)
-#                    print(exp)
-#                    print('This is the cons_array mayn',cons_arr, 'ANNND diffusing species',diff_spe)
 #                    print(self.X_1_2(dbe,cons_arr,diff_spe))
                     if X_ex_1==1:
                         X_ex_0=0
@@ -817,49 +809,44 @@ class ModelMQMQA:
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
                         X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp
-#IMPORTANT! exp is not the best way to fix this for parameteres higher than 1                        
-                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(diff_spe,X)/w(X))\
-                    *((1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)))
+                    if 0<(parse['parameter_order']-index)==3:                        
+                        X_ex_2+=X_a_Xb_tern*(ξ(diff_spe,X)/w(X))\
+                        *((1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1))
     
                 elif diff_spe in cations and diff_spe not in cons_cat \
-                and 2<(parse['parameter_order']-index)<=4 \
+                and 0<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,A,B,diff_spe)==0:
                  #This is for when they're all in the same species group
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
                         X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp
-
-                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(diff_spe,X)/w(X))\
-                    *((1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1)))
-#                    print(X_ex_2,coeff,self.excess_mixing_t1(dbe,param['constituent_array']))
+                    
+                    if 0<(parse['parameter_order']-index)==3:
+                        X_ex_2+=X_a_Xb_tern*(ξ(diff_spe,X)/w(X))\
+                        *((1-self.K_1_2(dbe,A,B)-self.K_1_2(dbe,B,A))**(exp-1))
 
                 elif diff_spe in cations and diff_spe not in cons_cat \
                 and 2<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,A,B,diff_spe)==B:
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
-                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp        
-                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,A,B)))\
-                    *(1-(ξ(A,X)/(w(X)*self.K_1_2(dbe,A,B))))**(exp-1))
+                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp       
+                    if 0<(parse['parameter_order']-index)==3:                        
+                        X_ex_2+=X_a_Xb_tern*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,A,B)))\
+                        *(1-(ξ(A,X)/(w(X)*self.K_1_2(dbe,A,B))))**(exp-1)
 
                 elif diff_spe in cations and diff_spe not in cons_cat \
-                and 0<(parse['parameter_order']-index)<=4 \
+                and 2<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,A,B,diff_spe)==A:
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
-                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp        
-                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,B,A)))\
-                    *(1-(ξ(B,X)/(w(X)*self.K_1_2(dbe,B,A))))**(exp-1))
-####LAST TERM IN THE 17.52 EQUATION                    
-                elif diff_spe in anions and Sub_ex_1==1 \
-                and 0<(parse['parameter_order']-index)<=4:
-                    if 0<(parse['parameter_order']-index)<=2:
-                        X_tern_diff_spe=parse['parameter_order']-index
-                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp        
-                    X_ex_2+=exp*X_a_Xb_tern*w(diff_spe)*w(X)**(exp-1)
-                    
+                        X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_cat[X_tern_diff_spe-1])**exp   
+                    if 0<(parse['parameter_order']-index)==3:                        
+                        X_ex_2+=X_a_Xb_tern*(ξ(diff_spe,X)/(w(X)*self.K_1_2(dbe,B,A)))\
+                        *(1-(ξ(B,X)/(w(X)*self.K_1_2(dbe,B,A))))**(exp-1)
+
                 elif diff_spe in anions and diff_spe not in cons_an \
-                and 0<(parse['parameter_order']-index)<=4 \
+                and 2<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,X,Y,diff_spe)==diff_spe:
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
@@ -869,7 +856,7 @@ class ModelMQMQA:
                     *((1-self.K_1_2(dbe,X,Y)-self.K_1_2(dbe,Y,X))**(exp-1)))                    
 
                 elif diff_spe in anions and diff_spe not in cons_an \
-                and 0<(parse['parameter_order']-index)<=4 \
+                and 2<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,X,Y,diff_spe)==0:
                     if 0<(parse['parameter_order']-index)<=2:
                         X_tern_diff_spe=parse['parameter_order']-index
@@ -878,11 +865,7 @@ class ModelMQMQA:
                     X_ex_2+=exp*(X_a_Xb_tern*(ξ(A,diff_spe)/w(A))\
                     *((1-self.K_1_2(dbe,X,Y)-self.K_1_2(dbe,Y,X))**(exp-1)))  
 
-                        
-                    X_ex_2+=exp*(X_a_Xb_tern*(ξ(A,diff_spe)/w(A))\
-                    *((1-self.K_1_2(dbe,X,Y)-self.K_1_2(dbe,Y,X))**(exp-1)))  
 
-                    
                 elif diff_spe in anions and diff_spe not in cons_an \
                 and 2<(parse['parameter_order']-index)<=4 \
                 and self.id_symm(dbe,X,Y,diff_spe)==X:
@@ -901,18 +884,35 @@ class ModelMQMQA:
                         X_a_Xb_tern*=self.X_1_2(dbe,cons_arr,cons_an[X_tern_diff_spe-1])**exp
                         
                     X_ex_2+=exp*(X_a_Xb_tern*(ξ(A,diff_spe)/(w(A)*self.K_1_2(dbe,X,Y)))\
-                    *(1-(ξ(A,X)/(w(A)*self.K_1_2(dbe,X,Y))))**(exp-1))                    
-#This is assuming that one wouldn't have both interaction parameters for anions and cations at the same time                                                      
-            if X_ex_2!=0 and exp==0:
-                exp+=1     
-#            print('CHECK HERE',coeff,X_ex_1,X_ex_0,X_ex_2,exp)
+                    *(1-(ξ(A,X)/(w(A)*self.K_1_2(dbe,X,Y))))**(exp-1))    
+                    
+                if diff_spe not in full and 0<(parse['parameter_order']-index)<=4 :
+                    X_ex_1*=0
+#This is assuming that one wouldn't have both interaction parameters for anions and cations at the same time    
+ 
+ #02-15-21 Comment this one out          
+ #           if X_ex_2!=0 and exp==0:
+ #               exp+=1     
+ #This is the end of potentially snipping   
+    
+            X_ex_0_var='X_ex_0' in locals()
+            
+            if X_ex_0_var is False:
+                X_ex_0=1
+                
             if X_ex_2==0:
-                X_ex_2+=1
-                exp+=1
-#            print(param['constituent_array'])
-#            print('part 1',self.excess_mixing_t1(dbe,param['constituent_array']),coeff)
-            X_ex+=self.excess_mixing_t1(dbe,param['constituent_array'])*coeff*X_ex_1*(X_ex_2/exp)*X_ex_0
-#used to multiplt X_ex_0 paramter. But I don't think it does anything anymore
+                X_ex_2=1
+                
+ #02-15-21 Comment this one out                          
+ #               exp+=1
+ #This is the end of potentially snipping   
+                
+
+#            print(param['constituent_array'],cations)
+#            print('cations and anions',cations,anions,'full',full)
+#            print('part 1',self.excess_mixing_t1(dbe,param['constituent_array']),'diffusion species',diff_spe,'coeff',coeff,'X_ex_1',X_ex_1,'X_ex_2',X_ex_2,'X_ex_0',X_ex_0)
+
+            X_ex+=self.excess_mixing_t1(dbe,param['constituent_array'])*coeff*X_ex_1*X_ex_2*X_ex_0
         return X_ex/self.normalization
 
     def shift_reference_state(self, reference_states, dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):

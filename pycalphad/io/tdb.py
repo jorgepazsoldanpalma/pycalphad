@@ -250,13 +250,14 @@ def _tdb_grammar(): #pylint: disable=R0914
     # PARAMETER
     # TODO: are Species diffusing species officially suported TDB syntax?
     # used in MQMQA reading hack
+
     cmd_parameter = TCCommand('PARAMETER') + param_types + \
         Suppress('(') + symbol_name + \
         Optional(Suppress('&') + species_name, default=None) + \
         Suppress(',') + constituent_array + \
         Optional(Suppress(';') + int_number, default=0) + \
         Suppress(')') + func_expr.setParseAction(_make_piecewise_ast) + \
-        Optional(Suppress(reference_key)) + LineEnd()
+        Optional(Suppress(reference_key)) + LineEnd()    
     # Now combine the grammar together
     all_commands = cmd_element | \
                     cmd_species | \
@@ -293,7 +294,7 @@ def _process_typedef(targetdb, typechar, line):
     tokens = line.replace(',', '').split()
     if len(tokens) < 4:
         return
-    keyword = expand_keyword(['DISORDERED_PART', 'MAGNETIC','MQMQA'], tokens[3].upper())[0]
+    keyword = expand_keyword(['DISORDERED_PART', 'MAGNETIC','MQMQA','QKTO'], tokens[3].upper())[0]
     if len(keyword) == 0:
         raise ValueError('Unknown type definition keyword: {}'.format(tokens[3]))
     if len(matching_phases) == 0:
@@ -360,7 +361,24 @@ def _process_typedef(targetdb, typechar, line):
         }
         for phase_name in matching_phases:
             targetdb.phases[phase_name].model_hints.update(model_hints)
+    if keyword == 'QKTO':       
+        token=tokens[4:]
+        in_type=[i for num,i in enumerate(token) if num>token.index('TYPE')]
+        in_spe=[i for num,i in enumerate(token) if num>token.index('SPECIES') and num<token.index('TYPE')]
+        species=[i for i in targetdb.species if i.name in in_spe]
+        species_str=[i.name for i in targetdb.species if i.name in in_spe]
+        symm=[int(i) for i in in_spe if i not in species_str]
+        chemical_group={}
 
+        for i,j in zip(species,symm):
+            chemical_group[i]=j
+                
+        model_hints = {
+            'qkto': {'chemical_groups':chemical_group, 'type':in_type[0]}
+        } 
+        for phase_name in matching_phases:
+            targetdb.phases[phase_name].model_hints.update(model_hints)
+            
 phase_options = {'ionic_liquid_2SL': 'Y',
                  'symmetry_FCC_4SL': 'F',
                  'symmetry_BCC_4SL': 'B',
@@ -369,6 +387,7 @@ phase_options = {'ionic_liquid_2SL': 'Y',
                  'aqueous': 'A',
                  'charged_phase': 'I',
                  'MQMQA': 'M',
+                 'QKTO' : 'Q'
                 }
 inv_phase_options = dict([reversed(i) for i in phase_options.items()])
 
@@ -854,6 +873,15 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                         model_hints['ihj_magnetic_structure_factor'])
             del model_hints['ihj_magnetic_afm_factor']
             del model_hints['ihj_magnetic_structure_factor']
+        if 'qkto' in model_hints.keys():
+            new_char = typedef_chars.pop()
+            typedefs[name].append(new_char)
+            chemical_groups = model_hints['qkto']['chemical_groups']
+            qkt_type=model_hints['qkto']['type']
+            species = ' '.join([f'{species.name} {group_index}' for species, group_index in chemical_groups.items()])
+            output += 'TYPE_DEFINITION {} GES AMEND_PHASE_DESCRIPTION {} QKTO SPECIES {} TYPE {} !\n'\
+                .format(new_char,name.upper(),species,qkt_type)
+            del model_hints['qkto']
         if len(model_hints) > 0:
             # Some model hints were not properly consumed
             raise ValueError('Not all model hints are supported: {}'.format(model_hints))
@@ -878,15 +906,32 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
     param_sorted = defaultdict(lambda: list())
     paramtuple = namedtuple('ParamTuple', ['phase_name', 'parameter_type', 'complexity', 'constituent_array',
                                            'parameter_order', 'diffusing_species', 'parameter', 'reference'])
+    QKT_count=S.Zero
     for param in dbf._parameters.all():
+#        print('Jorge make it work',param)
         if groupby == 'subsystem':
-            components = set()
+            components = set()           
             for subl in param['constituent_array']:
                 components |= set(subl)
             if param['diffusing_species'] != Species(None):
                 components |= {param['diffusing_species']}
             # Wildcard operator is not a component
             components -= {'*'}
+            
+########################################            
+            if param['parameter_type']=='QKT' and param['diffusing_species']==None:
+                a=[i for i in str(param['parameter_order'])]
+                a[1]=param['exponents'][0]
+                a[2]=param['exponents'][1]
+                param['parameter_order'] = int(''.join(map(str,a)))
+                param['diffusing_species']=Species(None)
+######################################### #               
+                
+################################            
+#            print('jORGE', components,type(components))
+            components = list(components)
+            components = set([i for i in components if i!=None])
+#############################            
             desired_active_pure_elements = [list(x.constituents.keys()) for x in components]
             components = set([el.upper() for constituents in desired_active_pure_elements for el in constituents])
             # Remove vacancy if it's not the only component (pure vacancy endmember)
@@ -899,6 +944,8 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
         else:
             raise ValueError('Unknown groupby attribute \'{}\''.format(groupby))
         # We use the complexity parameter to help with sorting the parameters logically
+        
+  
         param_sorted[grouping].append(paramtuple(param['phase_name'], param['parameter_type'],
                                                  sum([len(i) for i in param['constituent_array']]),
                                                  param['constituent_array'], param['parameter_order'],
@@ -921,16 +968,19 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             ds = "&" + param_to_write.diffusing_species.name
         else:
             ds = ""
-        return "PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
-                                                        param_to_write.phase_name.upper(),
-                                                        ds,
-                                                        constituents,
-                                                        param_to_write.parameter_order,
-                                                        exprx)
+            
+        a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
+                                                            param_to_write.phase_name.upper(),
+                                                            ds,
+                                                            constituents,
+                                                            param_to_write.parameter_order,
+                                                            exprx)      
+        return a
     if groupby == 'subsystem':
         for num_species in range(1, 5):
             subsystems = list(itertools.combinations(sorted([i.name.upper() for i in dbf.species]), num_species))
             for subsystem in subsystems:
+#                print('Jorge is about to cry',subsystem,param_sorted[subsystem])
                 parameters = sorted(param_sorted[subsystem])
                 if len(parameters) > 0:
                     output += "\n\n"
@@ -1013,6 +1063,7 @@ def read_tdb(dbf, fd):
 
     # Process type definitions last, updating model_hints for defined phases.
     for typechar, line in dbf._typedefs_queue:
+        print('Jorge fnsajifnasf',_process_typedef(dbf, typechar, line),typechar,line)
         _process_typedef(dbf, typechar, line)
     # Raise warnings if there are any remaining type characters that one or more
     # phases expected to be defined

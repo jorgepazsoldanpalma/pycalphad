@@ -687,7 +687,11 @@ class Model(object):
         # Species of the same chemical group may use a Kohler-type or
         # Muggianu-type approximation (the choice does not affect this function).
         # Species of different chemical groups use a Toop-type approximation.
-        toop_filter = _toop_filter(phase.model_hints['chemical_groups'], i, j)
+            ######***03-22-2022***#####
+            ######added the qkto aspect to the dictionary in order to make it work#####
+            ######Not sure that is the correct approach but it is the one I am taking for now#####
+            ######Used to be toop_filter = _toop_filter(phase.model_hints['chemical_groups'], i, j)#####
+        toop_filter = _toop_filter(phase.model_hints['qkto']['chemical_groups'], i, j)
         toop_correction = S.Zero
         active_subl_comps = phase.constituents[sublattice_index].intersection(self.components)
         for k in filter(toop_filter, active_subl_comps):
@@ -703,7 +707,13 @@ class Model(object):
         # callers of this function are only interested in a Kohler-type
         # approximation for species of the same type. Species of different
         # chemical groups use a Toop-type approximation.
-        kohler_filter = _kohler_filter(phase.model_hints['chemical_groups'], i, j)
+        
+            ######***03-22-2022***#####
+            ######added the qkto aspect to the dictionary in order to make it work#####
+            ######Not sure that is the correct approach but it is the one I am taking for now#####
+            ######Used to be kohler_filter = _kohler_filter(phase.model_hints['chemical_groups'], i, j)#####
+        kohler_filter = _kohler_filter(phase.model_hints['qkto']['chemical_groups'], i, j)
+##########***************###########    
         kohler_correction = S.Zero
         active_subl_comps = phase.constituents[sublattice_index].intersection(self.components)
         for k in filter(kohler_filter, active_subl_comps):
@@ -730,7 +740,7 @@ class Model(object):
         mixing_term = (Xi_ij - Xi_ji) / sigma_ij
         return L_ij * mixing_term**parameter_order
     
-    
+####Changed exponents to parameter order and also changed the expoennets to parameter order in cs_dat file    
     def kohler_toop_excess_sum(self, dbe):
         phase = dbe.phases[self.phase_name]
         param_query = (
@@ -739,11 +749,15 @@ class Model(object):
             (where('constituent_array').test(self._array_validity))
         )
         param_search = dbe.search
-
+        
         params = param_search(param_query)
         kohler_toop_xs = S.Zero
         for param in params:
+            check=[0 for keys in param if keys=='exponents']
             mixing_term = S.One
+            if not check:
+                new_exponents=[int(i) for i in str(param['parameter_order'])]
+                param["exponents"]=new_exponents[1:]
             for subl_idx, subl_comps in enumerate(param["constituent_array"]):
                 mixing_term *= Mul(*[v.SiteFraction(phase.name, subl_idx, comp) for comp in subl_comps])
                 if len(subl_comps) == 2:
