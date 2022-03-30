@@ -8,7 +8,7 @@ from sympy import S
 from pycalphad import Database, Model, ReferenceState, equilibrium
 from pycalphad.core.utils import make_callable
 from pycalphad.tests.datasets import ALCRNI_TDB, FEMN_TDB, FE_MN_S_TDB, ALFE_TDB, \
-    CRFE_BCC_MAGNETIC_TDB, VA_INTERACTION_TDB, CUMG_TDB, AL_C_FE_B2_TDB,VIITALA_DAT
+    CRFE_BCC_MAGNETIC_TDB, VA_INTERACTION_TDB, CUMG_TDB, AL_C_FE_B2_TDB,VIITALA_DAT,KAYE_QKTO
 from pycalphad.core.errors import DofError
 import pycalphad.variables as v
 import numpy as np
@@ -24,6 +24,7 @@ FE_MN_S_DBF = Database(FE_MN_S_TDB)
 VA_INTERACTION_DBF = Database(VA_INTERACTION_TDB)
 AL_C_FE_B2_DBF = Database(AL_C_FE_B2_TDB)
 VIITALA_DBF = Database.from_string(VIITALA_DAT, fmt='dat')
+KAYE_DAT=  Database.from_string(KAYE_QKTO, fmt='dat')
 
 def test_sympify_safety():
     "Parsing malformed strings throws exceptions instead of executing code."
@@ -699,3 +700,79 @@ def test_MQMQA_site_fraction_energy():
     assert np.isclose(float(mod.moles('CL').subs(subs_dict)), 0.6923076923,1e-5)
     assert np.isclose(float(mod.moles('ZN').subs(subs_dict)), 0.07692307692,1e-5)
     assert np.isclose(float(mod.moles('FE').subs(subs_dict)), 0.15384615384,1e-5)
+
+def test_QKTO_binary_mixing():
+    RU = v.Species("RU")
+    PD = v.Species("PD")
+
+    mod = Model(KAYE_DAT, [ "RU", "PD"], "LIQN")
+
+    assert RU in mod.constituents[0]
+    assert PD in mod.constituents[0]
+
+    subs_dict = {  # Thermochimica site fractions
+        v.Y("LIQN", 0, RU): 0.40,
+        v.Y("LIQN", 0, PD): 0.60,
+        v.T: 2500.00,
+    }
+
+    assert np.isclose(float(mod.moles("PD").subs(subs_dict)), 0.60, 1e-5)
+    assert np.isclose(float(mod.moles("RU").subs(subs_dict)), 0.40, 1e-5)
+    check_energy(mod, subs_dict, -1.89736E+05, mode="sympy")
+    
+    
+def test_QKTO_multicomponent_extrapolation_binary_mixing():
+    """Test extrapolation into multi-component from only binary excess parameters"""
+    PD = v.Species("PD")
+    RU = v.Species("RU")
+    TC = v.Species("TC")
+    MO = v.Species("MO")
+
+    mod = Model(KAYE_DAT, ["PD", "RU", "TC", "MO"], "LIQN")
+
+    assert PD in mod.constituents[0]
+    assert RU in mod.constituents[0]
+    assert TC in mod.constituents[0]
+    assert MO in mod.constituents[0]
+
+    subs_dict = {  # Thermochimica site fractions
+        v.Y("LIQN", 0, MO): 0.025,
+        v.Y("LIQN", 0, TC): 0.5,
+        v.Y("LIQN", 0, RU): 0.4,
+        v.Y("LIQN", 0, PD): 0.075,
+        v.T: 2500.00,
+    }
+
+    check_energy(mod, subs_dict, -1.85308E+05, mode="sympy")  # Thermochimica energy
+    assert np.isclose(float(mod.moles("MO").subs(subs_dict)), 0.025, 1e-5)
+    assert np.isclose(float(mod.moles("TC").subs(subs_dict)), 0.50, 1e-5)
+    assert np.isclose(float(mod.moles("RU").subs(subs_dict)), 0.40, 1e-5)
+    assert np.isclose(float(mod.moles("PD").subs(subs_dict)), 0.075, 1e-5)
+    
+def test_QKTO_multicomponent_extrapolation():
+    """Test extrapolation into multi-component from binary and ternary excess parameters"""
+    PD = v.Species("PD")
+    RU = v.Species("RU")
+    TC = v.Species("TC")
+    MO = v.Species("MO")
+
+    mod = Model(KAYE_DAT, ["PD", "RU", "TC", "MO"], "HCPN")
+
+    assert PD in mod.constituents[0]
+    assert RU in mod.constituents[0]
+    assert TC in mod.constituents[0]
+    assert MO in mod.constituents[0]
+
+    subs_dict = {  # Thermochimica site fractions
+        v.Y("HCPN", 0, MO): 0.025,
+        v.Y("HCPN", 0, TC): 0.500,
+        v.Y("HCPN", 0, RU): 0.400,
+        v.Y("HCPN", 0, PD): 0.075,
+        v.T: 1500.00,
+    }
+
+    check_energy(mod, subs_dict, -90169.957, mode="sympy")  # Thermochimica energy
+    assert np.isclose(float(mod.moles("MO").subs(subs_dict)), 0.025, 1e-5)
+    assert np.isclose(float(mod.moles("TC").subs(subs_dict)), 0.500, 1e-5)
+    assert np.isclose(float(mod.moles("RU").subs(subs_dict)), 0.400, 1e-5)
+    assert np.isclose(float(mod.moles("PD").subs(subs_dict)), 0.075, 1e-5)
