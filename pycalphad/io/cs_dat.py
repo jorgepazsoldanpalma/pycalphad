@@ -48,6 +48,7 @@ def _parse_species_postfix_charge(formula) -> v.Species:
         charge = 0
     # assumes that the remaining formula is a pure element
     constituents = dict(parse_chemical_formula(formula)[0])
+    print('Almost done here',name,constituents)
     return v.Species(name, constituents=constituents, charge=charge)
 
 
@@ -90,7 +91,7 @@ class AdditionalCoefficientPair:
             return self.coefficient*log(v.T)
         if abs(self.exponent) > 9:
             warnings.warn(f"Additional coefficient pair has an exponent of {self.exponent}, which should be between -9 and +9.")
-        return self.coefficient * v.T**(self.exponent)
+        return self.coefficient * v.T**(int(self.exponent))
 
 
 @dataclass
@@ -171,7 +172,6 @@ class Endmember():
     gibbs_eq_type: str
     stoichiometry_pure_elements: [float]
     intervals: [IntervalBase]
-
     def expr(self, indices):
         """Return a Piecewise (in temperature) energy expression for this endmember (i.e. only the data from the energy intervals)"""
         T_min = 298.15
@@ -200,6 +200,7 @@ class Endmember():
             return [v.Species(self.species_name, constituents=self.constituents(pure_elements))]
 
     def insert(self, dbf: Database, phase_name: str, constituent_array: [[str]], gibbs_coefficient_idxs: [int]):
+#        print('IN endmember now',self.expr(gibbs_coefficient_idxs))
         dbf.add_parameter('G', phase_name, constituent_array,
                           0, self.expr(gibbs_coefficient_idxs), force_insert=False)
         
@@ -216,7 +217,14 @@ class EndmemberQKTO(Endmember):
         if not np.isclose(self.stoichiometric_factor, 1.0):
             raise ValueError(f"QKTO endmembers with stoichiometric factors other than 1 are not yet supported. Got {self.stoichiometric_factor} for {self}")
     #End from Brandon's branch 02/10/22     
+
+@dataclass
+class EndmemberSUBI(Endmember):
+
+    def insert(self, dbf: Database, phase_name: str, constituent_array: List[List[str]], gibbs_coefficient_idxs: List[int]):
+        dbf.add_parameter('G', phase_name, constituent_array, 0, self.expr(gibbs_coefficient_idxs), force_insert=False)
         
+    
 @dataclass
 class EndmemberMagnetic(Endmember):
     curie_temperature: float
@@ -225,11 +233,10 @@ class EndmemberMagnetic(Endmember):
     def insert(self, dbf: Database, phase_name: str, pure_elements: [str], gibbs_coefficient_idxs: [int]):
         # add Gibbs energy
         super().insert(dbf, phase_name, pure_elements, gibbs_coefficient_idxs)
-
         # also add magnetic parameters
-        dbf.add_parameter('BMAG', phase_name, self.constituent_array(),
+        dbf.add_parameter('BMAG', phase_name, pure_elements,
                           0, self.magnetic_moment, force_insert=False)
-        dbf.add_parameter('TC', phase_name, self.constituent_array(),
+        dbf.add_parameter('TC', phase_name, pure_elements,
                           0, self.curie_temperature, force_insert=False)
 
 
@@ -481,7 +488,6 @@ class Phase_CEF(PhaseBase):
             # model divides by the AFM factor (-1/3). We convert the AFM
             # factor to the version used in the TDB/Model.
             model_hints['ihj_magnetic_afm_factor'] = -1/self.magnetic_afm_factor
-
 ##########******03-22-2022******########
 #####Beginning to change this section in order to add model_hints to QKTO#####
 #####I made need this mode_hints in order to determine symmetry issues######
@@ -514,7 +520,6 @@ class Phase_CEF(PhaseBase):
                     chemical_groups[species] = endmember.chemical_group
         if len(chemical_groups.keys()) > 0:
             ######******03-22-2022*******######
-            
             model_hints['qkto']["chemical_groups"] = chemical_groups 
         #End from Brandon's branch 02/10/22
         if self.phase_type=='QKTO': 
@@ -572,7 +577,8 @@ class Phase_CEF(PhaseBase):
         # First for endmembers
         if self.endmember_constituent_idxs is None:
             # we have to guess at the constituent array
-            for endmember in self.endmembers:
+            for endmember in self.endmembers:                
+                
                 endmember.insert(dbf, self.phase_name, endmember.constituent_array(), gibbs_coefficient_idxs)
         else:
             # we know the constituent array from the indices and we don't have
@@ -586,6 +592,10 @@ class Phase_CEF(PhaseBase):
         # array. As discussed in ExcessRKM.insert, we use the built constituent
         # order above, but some models (e.g. SUBL) define the phase models
         # internally and this is thrown away by the parser currently.
+        for i in self.excess_parameters:
+            if i=='0':
+                self.excess_parameters.pop()
+        
         for excess_param in self.excess_parameters:
             excess_param.insert(dbf, self.phase_name, self.constituent_array, excess_coefficient_idxs)
 
@@ -672,7 +682,6 @@ class ExcessQuadruplet:
 # THIS USED TO BE if sum(self.mixing_exponents)==1 and self.additional_mixing_const==0: BEFORE I CHANGED THE IF STATEMENT BELOW 
         if sum(self.mixing_exponents)!=0 and self.additional_mixing_const==0:
             specie_order=[count for count,par in enumerate(self.mixing_exponents) if par!=0 ]
-#            print('binary array',binary_array,specie_order)
             for count,mix_exp in enumerate(self.mixing_exponents):
                 parameter_order=count+1+index
                 parameter=mix_exp
@@ -703,10 +712,63 @@ class ExcessQuadruplet:
 #                          parameter_G, diffusing_species=self.additional_mixing_const,force_insert=False)
 
 
+@dataclass
+class ExcessSUBI():
+    mixing_type: int
+    species_and__pama_order_const: List[int]
+    excess_coeffs: List[float]
+#    return ExcessSUBI(mixing_type, species_and__pama_order_const,excess_coeffs)
+    def expr(self, indices):
+        """Return an expression for the energy in this temperature interval"""
+        energy = S.Zero
+        # Add fixed energy terms
+        energy += sum([int(C)*EXCESS_TERMS_SUBG[count] for count, C in enumerate(indices)])
+        return energy
 
+    @staticmethod  # So it can be in the style of a Database() method
+    def _database_add_parameter(
+        self, param_type, phase_name, constituent_array,
+        parameter, order,
+        ref=None, force_insert=True
+        ):
+        species_dict = {s.name: s for s in self.species}
+####****03-22-2022****###
+####Added diffusing species here since it kept giving me errors for it#####
+        new_parameter = {
+            'phase_name': 'IONIC_LIQ',
+            'constituent_array':tuple(tuple(species_dict.get(s.upper(), v.Species(s)) for s in xs) for xs in constituent_array),  # must be hashable type
+            'parameter_type': param_type,
+            'parameter': parameter,
+            'parameter_order': order,
+            'diffusing_species': None,
+            'reference': ref,
+        }
+        if force_insert:
+            self._parameters.insert(new_parameter)
+        else:
+            self._parameter_queue.append(new_parameter)
+        
 
-
-
+    def insert(self, dbf: Database, phase_name: str, cations: List[str], anions: List[str]):
+        # TODO: does this use the ] groups in the generalized Kohler-Toop formalism?
+#mixing_type, species_and__pama_order_const,excess_coeffs
+        phase_constituents=cations+anions
+        constituents_cat_subl=[phase_constituents[i-1] for i in self.species_and__pama_order_const if phase_constituents[i-1] in cations]
+        constituents_an_subl=[phase_constituents[i-1] for i in self.species_and__pama_order_const if phase_constituents[i-1] in anions]
+        const_array=[constituents_cat_subl,constituents_an_subl]
+        full_excess_list=[]
+        parameter_number=6
+        for i in range(0,len(self.excess_coeffs),int(parameter_number)):
+            full_excess_list.append(self.excess_coeffs[i:i+int(parameter_number)])   
+        order=S.Zero
+        for excess_coeffs in full_excess_list:  
+            self._database_add_parameter(
+                dbf, "ionic", 'IONIC_LIQ', const_array,
+                self.expr(excess_coeffs), order, 
+                force_insert=False)
+            order+=1
+            
+            
 def _species(el_chg):
     el, chg = el_chg
     name = rename_element_charge(el, chg)
@@ -823,6 +885,78 @@ class Phase_SUBQ(PhaseBase):
         for index,excess_param in enumerate(self.excess_parameters):
             excess_param.insert(dbf, self.phase_name, cations, anions,5*index)
 
+@dataclass
+class Phase_SUBI(PhaseBase):
+    subl_const_idx_pairs: [int]
+    num_subl_2_an: int
+    subl_1_const: [str]
+    subl_2_const: [str]
+    subl_1_charges: [int]
+    subl_2_charges: [int]
+    excess_parameters: [ExcessSUBI]
+    phase_type= [str]
+    def insert(self, dbf: Database, pure_elements: [str], gibbs_coefficient_idxs: [int], excess_coefficient_idxs: [int]):
+        # There are some tricky things to handle for quadruplet formalism
+        # All AB:XY quadruplets are the constituents and they exist on one
+        # sublattice.
+        # 1. We need to store the endmember energies which are defined in A:X
+        #    pairs. We'll store these as the pairs and it will be up to the
+        #    Model implementation to query for these parameters.
+        # 2. We need to store the coordination numbers of Z^i_AB:XY defined in
+        #    we'll AB:XY quadruplets. We'll store the Z parameter for the
+        #    quadrpulet configuration and use the diffusing species to indicate
+        #    the element that coordination number belongs to. We store these
+        #    like endmembers for AB:XY quadruplets.
+        # 3. We need to store the excess parameters, defined in terms of AB:XY
+        #    quadruplets. AB:XX means mixing between AA:XX - BB:XX, so we can
+        #    enter the constituent array as normal with mixing between them.
+
+        # One thing we'll have to keep track of is repeated species that have
+        # different charge. Since pycalphad usually uses Species to
+        # differentiate charged species, for example Species('CU', charge=1)
+        # vs. Species('CU', charge=2) and we are using Speices to refer to a
+        # quadruplet which may have both CU+1 and CU+2 states inside, we need
+        # to add an additional qualifier to the name of the elements in the
+        # species so that we can clearly differentiate the (CU+1 CU+1):(XY)
+        # quadruplet from the (CU+2 CU+2):(XY) quadruplet. We do that by adding
+        # the charge to the name (without +/-), i.e. CU_1 or CU_1.0. One benefit
+        # of doing this is that we don't have to worry about Species name
+        # collisions within the Database.
+
+        # First: get the pair and quadruplet species added to the database:
+        # Here we rename the species names according to their charges, to avoid creating duplicate pairs/quadruplets
+        cation_el_chg_pairs = list(zip(self.subl_1_const,[float(c) for c in self.subl_1_charges]))
+        # anion charges are given as positive values, but should be negative in
+        # order to make the species entered in the expected way (`CL-1`).
+        anion_el_chg_pairs = list(zip(self.subl_2_const,[-1*float(c) for c in self.subl_2_charges]))
+
+        cations = [rename_element_charge(el, chg) for el, chg in cation_el_chg_pairs]
+        anions = [rename_element_charge(el, chg) for el, chg in anion_el_chg_pairs]
+        tot_ele=cation_el_chg_pairs+anion_el_chg_pairs
+
+        # Add the "pure" (renamed) species to the database so the phase constituents can be added
+        dbf.species.update(map(_species, cation_el_chg_pairs))
+        dbf.species.update(map(_species, anion_el_chg_pairs))
+
+        model_hints={}
+        model_hints['ionic']={}        
+        model_hints['ionic']['type']=self.phase_type
+        dbf.add_phase('IONIC_LIQ:Y', model_hints, sublattices=[1.0,1.0])
+        dbf.add_phase_constituents('IONIC_LIQ:Y', [cations, anions])
+        
+        # Third: add the endmember (pair) Gibbs energies
+        # We assume that every pair that can exist is defined, i.e.
+
+        num_pairs = len(list(itertools.product(cations, anions)))
+        assert len(self.endmembers) == num_pairs
+        
+        # Endmember pairs came in order of the specified subl_const_idx_pairs labels.
+        for (i, j), endmember in zip(self.subl_const_idx_pairs, self.endmembers):
+            endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)
+        # Fifth: add excess parameters
+        for index,excess_param in enumerate(self.excess_parameters):
+            excess_param.insert(dbf, 'IONIC_LIQ:Y', cations, anions)
+
 
 # TODO: not yet supported
 @dataclass
@@ -895,6 +1029,7 @@ def parse_interval_heat_capacity(toks: TokenParser, num_gibbs_coeffs, H298, S298
 
 def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_stoichiometric=False):
     species_name = toks.parse(str)
+    print('species_name',species_name)
     if toks[0] == '#':
         # special case for stoichiometric phases, this is a dummy species, skip it
         _ = toks.parse(str)
@@ -962,6 +1097,12 @@ def parse_endmember_subq(toks: TokenParser, num_pure_elements, num_gibbs_coeffs,
         zeta = toks.parse(float)
     return EndmemberSUBQ(em.species_name, em.gibbs_eq_type, em.stoichiometry_pure_elements, em.intervals, stoichiometry_quadruplet, zeta)
 
+def parse_endmember_subi(toks: TokenParser, num_pure_elements: int, num_gibbs_coeffs: int):
+    # add an extra "pure element" to parse the charge
+    em = parse_endmember(toks, num_pure_elements, num_gibbs_coeffs)
+    # TODO: needs special QKTO endmember to store these, the stoichiometric factors and chemical groups should be parsed into model hints or something...
+
+    return EndmemberSUBI(em.species_name, em.gibbs_eq_type, em.stoichiometry_pure_elements, em.intervals)
 
 def parse_quadruplet(toks):
     quad_idx = toks.parseN(4, int)
@@ -979,6 +1120,14 @@ def parse_subq_excess(toks, mixing_type, num_excess_coeffs):
     excess_coeffs = toks.parseN(num_excess_coeffs, float)
     return ExcessQuadruplet(mixing_type, mixing_code, mixing_const, mixing_exponents, junk, additional_mixing_const, additional_mixing_exponent, excess_coeffs)
 
+
+###CHECK THIS TOMORROW####
+def parse_subi_excess(toks, mixing_type, num_excess_coeffs):
+    species_and__pama_order_const = toks.parseN(mixing_type, int)
+    num_nonideal_interactions = toks.parse(int)
+    excess_coeffs = toks.parseN(num_nonideal_interactions*num_excess_coeffs, float)
+    return ExcessSUBI(mixing_type, species_and__pama_order_const,excess_coeffs)
+##########################
 
 def parse_phase_subq(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs):
     if phase_type == 'SUBG':
@@ -1014,6 +1163,34 @@ def parse_phase_subq(toks, phase_name, phase_type, num_pure_elements, num_gibbs_
 
     return Phase_SUBQ(phase_name, phase_type, endmembers, num_pairs, num_quadruplets, num_subl_1_const, num_subl_2_const, subl_1_const, subl_2_const, subl_1_charges, subl_1_chemical_groups, subl_2_charges, subl_2_chemical_groups, subl_const_idx_pairs, quadruplets, excess_parameters)
 
+
+def parse_phase_subi(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_const,num_excess_coeffs):
+    endmembers = [parse_endmember_subi(toks, num_pure_elements, num_gibbs_coeffs) for _ in range(num_const)]
+#    endmember_label = toks.parse(str)
+    num_cations_species = toks.parse(int)
+    num_anions_species = toks.parse(int)
+    cations_const = toks.parseN(num_cations_species, str)
+    anions_const = toks.parseN(num_anions_species, str)  
+    number_species_charges=toks.parse(int)
+    cations_charges = toks.parseN(num_cations_species, str)
+    anions_charges = toks.parseN(num_anions_species, str)  
+
+    subl_1_pair_idx = toks.parseN(num_cations_species*num_anions_species, int)
+    subl_2_pair_idx = toks.parseN(num_cations_species*num_anions_species, int)
+
+    subl_const_idx_pairs = [(s1i, s2i) for s1i, s2i in zip(subl_1_pair_idx, subl_2_pair_idx)]
+    # TODO: not exactly sure my math is right on how many pairs, but I think it should be cations*anions
+    excess_parameters = []
+    while True:
+        mixing_type = toks.parse(int)
+        if mixing_type == 0:
+            break
+        elif mixing_type == -9:
+            # some garbage, like 1 2 3K 1 2K 1 3K 2 3 6, 90 of them
+            toks.parseN(90, str)
+            break
+        excess_parameters.append(parse_subi_excess(toks, mixing_type, num_excess_coeffs))
+    return Phase_SUBI(phase_name, phase_type, endmembers, subl_const_idx_pairs, num_anions_species, cations_const,  anions_const, cations_charges,anions_charges, excess_parameters)
 
 def parse_excess_magnetic_parameters(toks):
     excess_terms = []
@@ -1080,7 +1257,7 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
     is_magnetic_phase_type = len(phase_type) == 5 and phase_type[4] == 'M'
     sanitized_phase_type = phase_type[:4]  # drop the magnetic contribution, only used for matching later (i.e. SUBLM -> SUBL)
     if is_magnetic_phase_type:
-        allowed_magnetic_phase_types = ('RKMP', 'QKTO', 'SUBL', 'SUBM', 'SUBG', 'SUBQ', 'WAGN')
+        allowed_magnetic_phase_types = ('RKMP', 'QKTO', 'SUBL', 'SUBM', 'SUBG', 'SUBQ', 'WAGN','SUBI','SUBLM')
         if sanitized_phase_type not in allowed_magnetic_phase_types:
             raise ValueError(f'Magnetic phase type {phase_type} is only supported for {allowed_magnetic_phase_types}')
         magnetic_afm_factor = toks.parse(float)
@@ -1088,16 +1265,15 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
     else:
         magnetic_afm_factor = None
         magnetic_structure_factor = None
-
     endmembers = []
     for _ in range(num_const):
         if sanitized_phase_type == 'PITZ':
             endmembers.append(parse_endmember_aqueous(toks, num_pure_elements, num_gibbs_coeffs))
         elif sanitized_phase_type in ('QKTO',):
-            endmembers.append(parse_endmember_qkto(toks, num_pure_elements, num_gibbs_coeffs))
+            endmembers.append(parse_endmember_qkto(toks, num_pure_elements, num_gibbs_coeffs))          
         else:
+#            print('Jorge is here again',parse_endmember(toks, num_pure_elements, num_gibbs_coeffs))
             endmembers.append(parse_endmember(toks, num_pure_elements, num_gibbs_coeffs))
-
     # defining sublattice model
     if sanitized_phase_type in ('SUBL',):
         num_subl = toks.parse(int)
@@ -1132,7 +1308,7 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
     # excess terms
     if sanitized_phase_type in ('IDMX',):
         # No excess parameters
-        excess_parameters = []
+        excess_parameters = ['0']
     elif sanitized_phase_type in ('PITZ',):
         excess_parameters = parse_excess_parameters_pitz(toks, num_excess_coeffs)
     elif sanitized_phase_type in ('RKMP', 'SUBL'):
@@ -1142,7 +1318,6 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
             excess_parameters.extend(parse_excess_magnetic_parameters(toks))
         excess_parameters.extend(parse_excess_parameters(toks, num_excess_coeffs))
     elif sanitized_phase_type in ('QKTO',):
-#        print('Jorge here',toks, num_excess_coeffs)
         excess_parameters = parse_excess_qkto(toks, num_excess_coeffs)
     return Phase_CEF(phase_name, phase_type, endmembers, subl_ratios, constituent_array, endmember_constituent_idxs, excess_parameters, magnetic_afm_factor=magnetic_afm_factor, magnetic_structure_factor=magnetic_structure_factor)
 
@@ -1169,16 +1344,15 @@ def parse_phase(toks, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, nu
     """Dispatches to the correct parser depending on the phase type"""
     phase_name = toks.parse(str)
     phase_type = toks.parse(str)
-#    print('Jorge here',phase_name, phase_type)
     if phase_type in ('SUBQ', 'SUBG'):
-#        model_hints={}
-#        model_hints['mqmqa']={}
         phase = parse_phase_subq(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs)
 #        model_hints['mqmqa']['type']=phase_type
     elif phase_type == 'IDVD':
         phase = parse_phase_real_gas(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_const)
     elif phase_type == 'IDWZ':
         phase = parse_phase_aqueous(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_const)
+    elif phase_type == 'SUBI':
+        phase = parse_phase_subi(toks, 'IONIC_LIQ', phase_type, num_pure_elements, num_gibbs_coeffs, num_const,num_excess_coeffs) 
     elif phase_type in ('IDMX', 'RKMP', 'RKMPM', 'QKTO', 'SUBL', 'SUBLM', 'PITZ'):
         # all these phases parse the same
         phase = parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, num_const)
@@ -1189,9 +1363,16 @@ def parse_phase(toks, num_pure_elements, num_gibbs_coeffs, num_excess_coeffs, nu
 
 def parse_stoich_phase(toks, num_pure_elements, num_gibbs_coeffs):
     endmember = parse_endmember(toks, num_pure_elements, num_gibbs_coeffs, is_stoichiometric=True)
-
-
+    
     phase_name = endmember.species_name
+    parenthesis_index=[count for count,i in enumerate(phase_name) if i=='(']
+    quotation_index=[count for count,i in enumerate(phase_name) if i=="'"]
+    phase_name=[i for count,i in enumerate(phase_name) if count < parenthesis_index[0]]
+    if len(quotation_index)>0:
+        phase_name=[i for i in phase_name if i!="'"]
+            
+    phase_name=''.join(phase_name)
+    
     return Phase_Stoichiometric(phase_name, None, [endmember])
 
 

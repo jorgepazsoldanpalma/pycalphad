@@ -502,30 +502,24 @@ class ModelMQMQA:
             X=subl_2[0]
             Y=subl_2[0]
             Gibbs[A,B,X,Y]=param['parameter']
-        
-#        NA=[i for i in cations for name,count in i.constituents.items() if name=='NA'][0]
-#        CL=[i for i in anions for name,count in i.constituents.items() if name=='CL'][0]
-#        VA=[i for i in anions for name,count in i.constituents.items() if name=='VA'][0]
-        
-#        AL1=[i for i in cations for name,count in i.constituents.items() if name=='AL' and count==1][0]
-#        AL2=[i for i in cations for name,count in i.constituents.items() if name=='AL' and count==2][0]
+        print('reference energy my man',Gibbs)
 
         for i, A in enumerate(cations):
             for B in cations[i:]:
                 for j, X in enumerate(anions):
                     for Y in anions[j:]:
                         term1=((abs(X.charge)/self.Z(dbe,X,A,B,X,Y))+(abs(Y.charge)/self.Z(dbe,Y,A,B,X,Y)))**(-1)
-#                        print('term1',self.Z(dbe,X,A,B,X,Y),self.Z(dbe,Y,A,B,X,Y),A,B,X,Y)
-                        term2=(abs(X.charge)*self.Z(dbe,A,A,A,X,X)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[A,A,X,X]*2/(self.Z(dbe,A,A,A,X,X)*self.Coax(dbe,A,A,X,X)))
-#                        print('second term',Gibbs[A,A,X,X],A,B,X,Y)
-                        term3=(abs(X.charge)*self.Z(dbe,B,B,B,X,X)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[B,B,X,X]*2/(self.Z(dbe,B,B,B,X,X)*self.Coax(dbe,B,B,X,X)))#*self.Coax(dbe,B,B,X,X)
-#                        print('third term',term3,A,B,X,Y)
-                        term4=(abs(Y.charge)*self.Z(dbe,A,A,A,Y,Y)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[A,A,Y,Y]*2/(self.Z(dbe,A,A,A,Y,Y)*self.Coax(dbe,A,A,Y,Y)))#*self.Coax(dbe,A,A,Y,Y)
-#                        print('fourth term',term4,A,B,X,Y)
-                        term5=(abs(Y.charge)*self.Z(dbe,B,B,B,Y,Y)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[B,B,Y,Y]*2/(self.Z(dbe,B,B,B,Y,Y)*self.Coax(dbe,B,B,Y,Y)))#*self.Coax(dbe,B,B,Y,Y)
-#                        print('fifth term',term5,A,B,X,Y)
+                        term2=(abs(X.charge)*self.Z(dbe,A,A,A,X,X)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[A,A,X,X]*
+                            2/(self.Z(dbe,A,A,A,X,X)*self.Coax(dbe,A,A,X,X)))
+                        term3=(abs(X.charge)*self.Z(dbe,B,B,B,X,X)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,X,A,B,X,Y)))*(Gibbs[B,B,X,X]*
+                            2/(self.Z(dbe,B,B,B,X,X)*self.Coax(dbe,B,B,X,X)))
+                        term4=(abs(Y.charge)*self.Z(dbe,A,A,A,Y,Y)/(2*self.Z(dbe,A,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[A,A,Y,Y]*
+                            2/(self.Z(dbe,A,A,A,Y,Y)*self.Coax(dbe,A,A,Y,Y)))
+                        term5=(abs(Y.charge)*self.Z(dbe,B,B,B,Y,Y)/(2*self.Z(dbe,B,A,B,X,Y)*self.Z(dbe,Y,A,B,X,Y)))*(Gibbs[B,B,Y,Y]*
+                            2/(self.Z(dbe,B,B,B,Y,Y)*self.Coax(dbe,B,B,Y,Y)))
                         final_term=term1*(term2+term3+term4+term5)
                         surf+=p(A,B,X,Y)*final_term
+                        print('reference',self.Z(dbe,X,A,B,X,Y),self.Z(dbe,Y,A,B,X,Y))
         return surf/self.normalization
 
 
