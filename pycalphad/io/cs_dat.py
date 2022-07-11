@@ -48,7 +48,6 @@ def _parse_species_postfix_charge(formula) -> v.Species:
         charge = 0
     # assumes that the remaining formula is a pure element
     constituents = dict(parse_chemical_formula(formula)[0])
-    print('Almost done here',name,constituents)
     return v.Species(name, constituents=constituents, charge=charge)
 
 
@@ -571,22 +570,31 @@ class Phase_CEF(PhaseBase):
             for subl in self.constituent_array:
                 for const in subl:
                     dbf.species.add(_parse_species_postfix_charge(const))  # TODO: masses
+#                    print('DUCK DUCK',dbf.species)
         dbf.add_phase_constituents(self.phase_name, self.constituent_array)
-
+        chrg_species=['+','-']
+        ionic_soln=[j for i in self.constituent_array for j in i for x in list(j) if x in chrg_species]
+        if len(ionic_soln)!=0:
+                model_hints['ionic']={}     
+                model_hints['ionic']['type']='SUBL_IONIC'
+                
         # Now that all the species are in the database, we are free to add the parameters
         # First for endmembers
         if self.endmember_constituent_idxs is None:
             # we have to guess at the constituent array
             for endmember in self.endmembers:                
-                
                 endmember.insert(dbf, self.phase_name, endmember.constituent_array(), gibbs_coefficient_idxs)
         else:
             # we know the constituent array from the indices and we don't have
             # to guess
             for endmember, const_idxs in zip(self.endmembers, self.endmember_constituent_idxs):
                 em_const_array = [[self.constituent_array[i][sp_idx - 1]] for i, sp_idx in enumerate(const_idxs)]
-                endmember.insert(dbf, self.phase_name, em_const_array, gibbs_coefficient_idxs)
-
+                if len(ionic_soln)!=0:
+                    ionic_name=self.phase_name+':I'                    
+                    endmember.insert(dbf, ionic_name, em_const_array, gibbs_coefficient_idxs)
+                else:
+                    endmember.insert(dbf, self.phase_name, em_const_array, gibbs_coefficient_idxs)
+                    
         # Now for excess parameters
         # TODO: We add them last since they depend on the phase's constituent
         # array. As discussed in ExcessRKM.insert, we use the built constituent
@@ -597,7 +605,11 @@ class Phase_CEF(PhaseBase):
                 self.excess_parameters.pop()
         
         for excess_param in self.excess_parameters:
-            excess_param.insert(dbf, self.phase_name, self.constituent_array, excess_coefficient_idxs)
+            if len(ionic_soln)!=0:
+                ionic_name=self.phase_name+':I'
+                excess_param.insert(dbf, ionic_name, self.constituent_array, excess_coefficient_idxs)
+            else:
+                excess_param.insert(dbf, self.phase_name, self.constituent_array, excess_coefficient_idxs)
 
 def rename_element_charge(element, charge):
     """We use the _ to separate so we have something to split on."""
@@ -858,7 +870,6 @@ class Phase_SUBQ(PhaseBase):
 #        model_hints = {
 #            'mqmqa': list(map(_species, tot_ele))
 #        } 
-
         model_hints['mqmqa']['type']=self.phase_type
         dbf.add_phase(self.phase_name, model_hints, sublattices=[1.0])
         dbf.add_phase_constituents(self.phase_name, [cations, anions])
@@ -1029,7 +1040,6 @@ def parse_interval_heat_capacity(toks: TokenParser, num_gibbs_coeffs, H298, S298
 
 def parse_endmember(toks: TokenParser, num_pure_elements, num_gibbs_coeffs, is_stoichiometric=False):
     species_name = toks.parse(str)
-    print('species_name',species_name)
     if toks[0] == '#':
         # special case for stoichiometric phases, this is a dummy species, skip it
         _ = toks.parse(str)
@@ -1272,7 +1282,7 @@ def parse_phase_cef(toks, phase_name, phase_type, num_pure_elements, num_gibbs_c
         elif sanitized_phase_type in ('QKTO',):
             endmembers.append(parse_endmember_qkto(toks, num_pure_elements, num_gibbs_coeffs))          
         else:
-#            print('Jorge is here again',parse_endmember(toks, num_pure_elements, num_gibbs_coeffs))
+#            print('Jorge is here again',toks)
             endmembers.append(parse_endmember(toks, num_pure_elements, num_gibbs_coeffs))
     # defining sublattice model
     if sanitized_phase_type in ('SUBL',):

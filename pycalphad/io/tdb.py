@@ -331,12 +331,10 @@ def _process_typedef(targetdb, typechar, line):
             raise ValueError(f"The {disordered_phase} phase is not in the database, but is defined by: `TYPE_DEFINTION {typechar} {line}`")
     if keyword == 'MQMQA':
         token=tokens[4:]
-#        print(token.index('TYPE'))
         # This is for mqmqa I don't know what I am doing yet though....
         in_cat=[i for num,i in enumerate(token) if num<token.index('ANIONS') and i !='CATIONS']
         in_an=[i for num,i in enumerate(token) if num>token.index('ANIONS')]
         in_type=[i for num,i in enumerate(token) if num>token.index('TYPE')]
-#        print(in_type)        
         chemical_group={'cations':{},'anions':{}}
         species_cat=[i for i in targetdb.species if i.name in in_cat]
         species_an=[i for i in targetdb.species if i.name in in_an]
@@ -818,19 +816,45 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
         output += "ELEMENT {0} {1} {2} {3} {4} !\n".format(element.upper(), refphase, mass, H298, S298)
     if len(dbf.elements) > 0:
         output += "\n"
+####This is where all the species are are listed at the very top of the tdb files
+
+
+    redun_charge=[float(species.charge) for species in dbf.species]
+    redun_const=[species.constituents for species in dbf.species]
+    redun_name=[species.name for species in dbf.species]
+    redun_const_charge=list(zip(redun_const,redun_charge))
+    set_of_species=[]
+    name_of_species=[]
+    for count,i in enumerate(redun_const_charge):
+        if i in redun_const_charge and i not in set_of_species:
+            set_of_species.append(i)
+        elif i in redun_const_charge and i in set_of_species:
+            name_of_species.append(redun_name[count])
+            
     for species in sorted(dbf.species, key=lambda s: s.name):
-        if species.name not in dbf.elements:
+        if species.name not in dbf.elements and species.name not in name_of_species:
             # construct the charge part of the specie
             if species.charge != 0:
                 if species.charge >0:
                     charge_sign = '+'
                 else:
                     charge_sign = ''
-                charge = '/{}{}'.format(charge_sign, species.charge)
+                charge = '/{}{}'.format(charge_sign, float(species.charge))
+                cons_charge='{}{}'.format(charge_sign, float(species.charge))
             else:
                 charge = ''
-            species_constituents = ''.join(['{}{}'.format(el, val) for el, val in sorted(species.constituents.items(), key=lambda t: t[0])])
-            output += "SPECIES {0} {1}{2} !\n".format(species_constituents, species_constituents, charge)
+            vacancy_check=[i for i in species.constituents.keys() if i=='VA']
+            if species.charge==0 and len(vacancy_check)!=0:
+                continue
+            elif species.charge!=0 and len(vacancy_check)!=0:
+                continue
+            elif species.charge==0 and len(vacancy_check)==0:            
+                species_constituents_0 = ''.join(['{}{}'.format(el, val) for el, val in sorted(species.constituents.items(), key=lambda t: t[0])])
+                species_constituents_1 = ''.join(['{}{}'.format(el, val) for el, val in sorted(species.constituents.items(), key=lambda t: t[0])])
+            else:
+                species_constituents_0 = ''.join(['{}{}'.format(el, cons_charge) for el in sorted(species.constituents.keys(), key=lambda t: t[0])])
+                species_constituents_1 = ''.join(['{}{}'.format(el, val) for el, val in sorted(species.constituents.items(), key=lambda t: t[0])])
+            output += "SPECIES {0} {1}{2} !\n".format(species_constituents_0, species_constituents_1, charge)
     if len(dbf.species) > 0:
         output += "\n"
     # Write FUNCTION block
@@ -847,6 +871,8 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
     # Boilerplate code
     output += "TYPE_DEFINITION % SEQ * !\n"
     output += "DEFINE_SYSTEM_DEFAULT ELEMENT 2 !\n"
+    output += "DEFAULT_COMMAND DEF_SYS_ELEMENT VA /- !"
+
     for i in dbf.elements:
         default_elements = [i.upper() for i in sorted(dbf.elements) if i.upper() == 'VA' or i.upper() == '/-']
     if len(default_elements) > 0:
@@ -901,11 +927,13 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             output += 'TYPE_DEFINITION {} GES AMEND_PHASE_DESCRIPTION {} QKTO SPECIES {} TYPE {} !\n'\
                 .format(new_char,name.upper(),species,qkt_type)
             del model_hints['qkto']
-        if 'ionic' in model_hints.keys():
+        if 'ionic' in model_hints.keys() and 'SUBL_IONIC' not in model_hints['ionic']['type']:
             subi_type=model_hints['ionic']['type']
-#            species = ' '.join([f'{species.name} {group_index}' for species, group_index in chemical_groups.items()])
             del model_hints['ionic']
-        
+        if 'ionic' in model_hints.keys() and 'SUBL_IONIC' in model_hints['ionic']['type']:
+            subl_ionic_type=model_hints['ionic']['type']
+            del model_hints['ionic']
+            
         if len(model_hints) > 0:
             # Some model hints were not properly consumed
             raise ValueError('Not all model hints are supported: {}'.format(model_hints))
@@ -917,7 +945,23 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
         possible_options = set(phase_options.keys()).intersection(model_hints.keys())
         species=dbf.species
         species_name=[ele.name for ele in species if len(ele.constituents)>1]
+        charged_species=[ele for ele in species if ele.charge!=0]
+        charged_species=[spec for spec in charged_species for ele,num in spec.constituents.items() ]
+        charged_species_name=[spec.name for spec in charged_species for ele,num in spec.constituents.items()]
         species_constituents = [ele.constituents for ele in species if len(ele.constituents)>1]
+        ionic_subl=[subl for subl in phase_obj.constituents]
+        neutral_anion=[j.name for i in phase_obj.constituents for j in i if 'ionic' in model_hints]
+        neutral_anion=[i for i in neutral_anion if i not in charged_species_name and i !='VA']
+        complex_neutral_species_anion_index=[index for index,i in enumerate(species_name) if i in neutral_anion]
+        complex_neutral_species_anion=[]
+        complex_neutral_species_anion_name=[]   
+
+        if len(complex_neutral_species_anion_index)!=0:
+            complex_neutral_species_anion.append(species_constituents[complex_neutral_species_anion_index[0]])
+            complex_neutral_species_anion_name.append(species_name[complex_neutral_species_anion_index[0]])            
+        if 'ionic' in model_hints and 'SUBL_IONIC' in model_hints['ionic']['type']:
+            name_with_options=name_with_options+':I'
+        neutral_anion=[i for i in neutral_anion if i not in complex_neutral_species_anion_name]
         if len(possible_options) > 0:
             name_with_options += ':'
         for option in possible_options:
@@ -926,7 +970,10 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                                                       len(phase_obj.sublattices),
                                                       ' '.join([str(i) for i in phase_obj.sublattices]))
         constituents = ':'.join([','.join([spec.name for spec in sorted(subl)]) for subl in phase_obj.constituents])
+        chr_constituents=constituents.replace(':',',')
+        chr_constituents=chr_constituents.split(',')
         species_bool=[i for i in species_name if i not in constituents]
+        charged_species_bool=[i for i in charged_species_name if i not in chr_constituents]
         if len(species_bool)==0:
             full_stoich=[]
             full_stoich_monkey=[]
@@ -966,7 +1013,143 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                 
                 output += "CONSTITUENT {0} :{1}\n".format(name_with_options,C)
                 output += "{0}: !\n".format(B)
-                output += "\n"                
+                output += "\n"
+        elif len(charged_species_bool)<len(chr_constituents) and 'ionic' in model_hints and 'SUBL_IONIC' not in model_hints['ionic']['type']:
+            cation_sub=[]
+            anion_sub=[]
+            full_stoich=[]
+            for chg in sorted(charged_species, key=lambda s: s.name):
+                if chg.name not in dbf.elements and chg.name not in charged_species_bool:
+                # construct the charge part of the specie
+                    if chg.charge >0:
+                        charge_sign = '+'
+                    else:
+                        charge_sign = ''
+                    cons_charge='{}{}'.format(charge_sign, float(chg.charge))
+                    charged_species_constituents = ''.join(['{}{}'.format(el, cons_charge) for el in sorted(chg.constituents.keys(), key=lambda t: t[0])])
+                    if '+' in cons_charge:
+                        cation_sub.append(charged_species_constituents)
+                    else:
+                        anion_sub.append(charged_species_constituents)  
+            vac_anion=[index for index,i in enumerate(anion_sub) if 'VA' in i]
+            vac_cation=[index for index,i in enumerate(cation_sub) if 'VA' in i]
+            if len(vac_anion)==0 and len(vac_cation)!=0:
+                cation_sub[vac_cation[0]]='VA'
+            elif len(vac_anion)!=0 and len(vac_cation)==0:
+                anion_sub[vac_anion[0]]='VA'
+            else:
+                pass
+            anion_sub= anion_sub + neutral_anion
+            if len(complex_neutral_species_anion)!=0:
+                for j in complex_neutral_species_anion:
+                    complex_neutral_species_anion_num=len(j)
+                    tot=[]
+                    for ele,const in j.items():
+                        str_ele=str(ele)
+                        str_cons=str(const)
+                        if complex_neutral_species_anion_num == 1 and str_cons == '1.0':
+                            stoich=str_ele
+                        else:
+                            stoich=str_ele+str_cons
+                        tot.append(stoich)
+                        if len(tot) ==complex_neutral_species_anion_num and complex_neutral_species_anion_num>1:
+                            ind=len(full_stoich)
+                            del full_stoich[ind-1]
+                            tot=''.join(list(sorted(tot)))
+                        elif len(tot) ==complex_neutral_species_anion_num and complex_neutral_species_anion_num==1:
+                            tot=''.join(list(sorted(tot_monkey)))                        
+                        full_stoich.append(tot)
+            anion_sub=anion_sub+full_stoich
+            semi_final_cation=[]
+            semi_final_anion=[]
+            for i in cation_sub:
+                if i not in semi_final_cation:
+                    semi_final_cation.append(i)
+                else:
+                    continue
+            for i in anion_sub:
+                if i not in semi_final_cation:
+                    semi_final_anion.append(i)
+                else:
+                    continue
+            final_cation=','.join([spec for spec in semi_final_cation])
+            final_anion=','.join([spec for spec in semi_final_anion])
+            output += "CONSTITUENT {0} :{1} :{2}: !\n".format(name_with_options,final_cation,final_anion)
+            output += "\n"
+        elif len(charged_species_bool)<len(chr_constituents) and 'ionic' in model_hints and 'SUBL_IONIC' in model_hints['ionic']['type']:
+            cation_sub=[]
+            anion_sub=[]
+            full_stoich=[]
+            chg_subl=[i for subl in ionic_subl for i in subl]
+            for subl in ionic_subl:
+                subl_species_pos=[]
+                subl_species_neg=[]
+                for chg in subl:
+                    if chg.name not in dbf.elements and chg.name not in charged_species_bool:
+                # construct the charge part of the specie
+                        if chg.charge >0:
+                            charge_sign = '+'
+                        else:
+                            charge_sign = ''
+                        cons_charge='{}{}'.format(charge_sign, float(chg.charge))
+                        charged_species_constituents = ''.join(['{}{}'.format(el, cons_charge) for el in sorted(chg.constituents.keys(), key=lambda t: t[0])])
+                        if '+' in cons_charge:
+                            subl_species_pos.append(charged_species_constituents)
+                        else:
+                            subl_species_neg.append(charged_species_constituents)  
+                if len(subl_species_pos)>0:
+                    cation_sub.append(subl_species_pos)
+                else:
+                    anion_sub.append(subl_species_neg)
+                    
+            for subl in anion_sub:
+                index=[]
+                for count,spec in enumerate(subl):
+                    if 'VA' in spec:
+                        index.append(count)            
+                if len(index)>0:
+                    subl[index[0]]='VA'
+                else:
+                    pass
+                
+
+            for subl in cation_sub:
+                index=[]
+                for count,spec in enumerate(subl):
+                    if 'VA' in spec:
+                        index.append(count)
+                if len(index)>0:
+                    subl[index[0]]='VA'
+                else:
+                    pass
+            anion_sub= anion_sub + neutral_anion
+            
+            if len(complex_neutral_species_anion)!=0:
+                for j in complex_neutral_species_anion:
+                    complex_neutral_species_anion_num=len(j)
+                    tot=[]
+                    for ele,const in j.items():
+                        str_ele=str(ele)
+                        str_cons=str(const)
+                        if complex_neutral_species_anion_num == 1 and str_cons == '1.0':
+                            stoich=str_ele
+                        else:
+                            stoich=str_ele+str_cons
+                        tot.append(stoich)
+                        if len(tot) ==complex_neutral_species_anion_num and complex_neutral_species_anion_num>1:
+                            ind=len(full_stoich)
+                            del full_stoich[ind-1]
+                            tot=''.join(list(sorted(tot)))
+                        elif len(tot) ==complex_neutral_species_anion_num and complex_neutral_species_anion_num==1:
+                            tot=''.join(list(sorted(tot_monkey)))                        
+                        full_stoich.append(tot)
+            anion_sub=anion_sub+full_stoich
+            final_cation = ':'.join([','.join([spec for spec in sorted(subl)]) for subl in cation_sub])
+            final_anion = ':'.join([','.join([spec for spec in sorted(subl)]) for subl in anion_sub])
+
+            output += "CONSTITUENT {0} :{1} :{2}: !\n".format(name_with_options,final_cation,final_anion)
+            output += "\n"
+            
         else:
             output += "CONSTITUENT {0} :{1}: !\n".format(name_with_options, constituents)
             output += "\n"            
@@ -977,7 +1160,6 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                                            'parameter_order', 'diffusing_species', 'parameter', 'reference'])
     QKT_count=S.Zero
     for param in dbf._parameters.all():
-#        print('Jorge make it work',param)
         if groupby == 'subsystem':
             components = set()           
             for subl in param['constituent_array']:
@@ -1004,7 +1186,6 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             if param['parameter_type']=='L':
                 param['parameter_type']='G'               
 ######################################
-#            print('jORGE', components,type(components))
             components = list(components)
             components = set([i for i in components if i!=None])
 #############################            
@@ -1029,8 +1210,10 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                                                  param['reference']))
 
     def write_parameter(param_to_write):
-        constituents = ':'.join([','.join(sorted([i.name.upper() for i in subl]))
+        constituents = ':'.join([','.join(sorted([i.name.upper() for i in subl if i.charge==0]))
                          for subl in param_to_write.constituent_array])
+################OOOpSS####
+        species=dbf.species
         species_name=[ele.name for ele in species if len(ele.constituents)>1]
         species_const=[ele.constituents for ele in species if len(ele.constituents)>1]
         species_name_add_on=[ele.name for ele in species if len(ele.constituents)==1 and list(ele.constituents.values())[0] > 1]
@@ -1055,9 +1238,125 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                 if len(tot_monkey) ==fat_monkey_num:
                     tot_monkey=''.join(list(sorted(tot_monkey)))
             constituents=tot_monkey
-        # TODO: Handle references
+###########################
+####This is where Jorge added####
+        cation_sub=[]
+        anion_sub=[]
+        full_stoich=[]
+        if "IONIC_LIQ" in param_to_write.phase_name.upper():
+            ionic_subl_1 = [i for subl in param_to_write.constituent_array for i in subl if i.charge>0 ] 
+            ionic_subl_2 = [i for subl in param_to_write.constituent_array for i in subl if i.charge<0 or i.charge==0 ] 
+            chg_constituents=ionic_subl_1+ionic_subl_2
+            for chg in sorted(chg_constituents, key=lambda s: s.name):
+                full_stoich_monkey=[]
+                if chg.name not in dbf.elements and chg.charge!=0:
+                    if chg.charge >0:
+                        charge_sign = '+'
+                    else:
+                        charge_sign = ''
+                    cons_charge='{}{}'.format(charge_sign, chg.charge)
+                    charged_species_constituents = ''.join(['{}{}'.format(el, cons_charge) for el in sorted(chg.constituents.keys(), key=lambda t: t[0])])
+                    if '+' in cons_charge:
+                        cation_sub.append(charged_species_constituents)
+                    else:
+                        anion_sub.append(charged_species_constituents)
+                elif chg.name in species_name:
+                    sorted_element=sorted([el for el in chg.constituents.keys()])                    
+                    neutral_species_ionic=['{}{}'.format(el, num) for i in sorted_element for el,num in chg.constituents.items() if el==i]
+                    neutral_species_ionic=''.join([item for item in neutral_species_ionic])
+                    anion_sub.append(neutral_species_ionic)
+                elif chg.name not in species_name:
+                    anion_sub.append(str(chg.name))
+                else:
+                    pass
+            vac_anion=[index for index,i in enumerate(anion_sub) if 'VA' in i]
+            vac_cation=[index for index,i in enumerate(cation_sub) if 'VA' in i]
+            if len(vac_anion)==0 and len(vac_cation)!=0:
+                cation_sub[vac_cation[0]]='VA'
+            elif len(vac_anion)!=0 and len(vac_cation)==0:
+                anion_sub[vac_anion[0]]='VA'
+            else:
+                pass
+            second_sublattice=','.join([anion for anion in anion_sub])
+            first_sublattice=','.join([cation for cation in cation_sub])
+            colon=':'
+            constituents=first_sublattice+colon+second_sublattice
+#        else:
+#            constituents = ':'.join([','.join(sorted([i.name.upper() for i in subl]))
+#                             for subl in param_to_write.constituent_array])            
+#            anion_sub= anion_sub + neutral_anion
+
+##################################
+
         paramx = param_to_write.parameter
         phase_type=param_to_write.parameter_type
+        if ":I" in param_to_write.phase_name.upper():
+            for subl in param_to_write.constituent_array:
+                cation_subl=[]
+                anion_subl=[]
+                for chg in subl:
+                    if chg.name not in dbf.elements:
+                        if chg.charge >0:
+                            charge_sign = '+'
+                            chg_charge=float(chg.charge)
+                        elif chg.charge==0:
+                            charge_sign = ''
+                            chg_charge=''
+                        else:
+                            charge_sign = ''
+                            chg_charge=float(chg.charge)
+                        cons_charge='{}{}'.format(charge_sign, chg_charge)
+                        
+                        charged_species_constituents = ''.join(['{}{}'.format(el, cons_charge) for el in sorted(chg.constituents.keys(), key=lambda t: t[0])])
+                        
+                        if '+' in cons_charge:
+                            cation_subl.append(charged_species_constituents)
+                        else:
+                            anion_subl.append(charged_species_constituents)
+                    elif chg.name in species_name:
+                        sorted_element=sorted([el for el in chg.constituents.keys()])                    
+                        neutral_species_ionic=['{}{}'.format(el, num) for i in sorted_element for el,num in chg.constituents.items() if el==i]
+                        neutral_species_ionic=''.join([item for item in neutral_species_ionic])
+                        anion_subl.append(neutral_species_ionic)
+                    elif chg.name not in species_name:
+                        anion_sub.append(str(chg.name))
+                    else:
+                           pass  
+                if len(cation_subl)>0:
+                    cation_sub.append(cation_subl)
+                if len(anion_subl)>0:
+                    anion_sub.append(anion_subl)
+            final_cation_sublattice=[]
+            final_anion_sublattice=[]
+            if len(cation_sub)==1:
+                cation_sublattice=','.join([spec for cation in cation_sub for spec in cation])
+            elif len(cation_sub)>1:
+                cations=[]
+                for sub in cation_sub:
+                    sublattice=','.join([spec for spec in sub])
+                    cations.append(sublattice)
+                final_cation_sublattice=':'.join([cation for cation in cations])
+            if len(anion_sub)==1:                
+                anion_sublattice=','.join([spec for anion in anion_sub for spec in anion])
+            elif len(anion_sub)>1:
+                anions=[]
+                for sub in anion_sub:
+                    sublattice=','.join([spec for spec in sub])
+                    anions.append(sublattice) 
+                final_anion_sublattice=':'.join([anion for anion in anions])
+            
+            if len(final_cation_sublattice)==0:
+                final_cation_sublattice=cation_sublattice
+                
+            if len(final_anion_sublattice)==0:
+                final_anion_sublattice=anion_sublattice                
+            
+            colon=':'
+            constituents=final_cation_sublattice+colon+final_anion_sublattice
+
+
+                    
+                    
         if phase_type=='ionic' and param_to_write.diffusing_species == None:
             param_to_write.diffusing_species==Species(param_to_write.diffusing_species)
             
@@ -1072,13 +1371,24 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             ds = "&" + param_to_write.diffusing_species.name
         else:
             ds = ""
-            
-        a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
-                                                            param_to_write.phase_name.upper(),
-                                                            ds,
-                                                            constituents,
-                                                            param_to_write.parameter_order,
-                                                            exprx)      
+        if ":I" in param_to_write.phase_name.upper():
+            name=param_to_write.phase_name.upper()
+            name=[i for count,i in enumerate(name) if count!=len(name)-1 and count!=len(name)-2]
+            name=''.join([letter for letter in name])
+
+            a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
+                                                                name,
+                                                                ds,
+                                                                constituents,
+                                                                param_to_write.parameter_order,
+                                                                exprx)      
+        else:
+            a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
+                                                                param_to_write.phase_name.upper(),
+                                                                ds,
+                                                                constituents,
+                                                                param_to_write.parameter_order,
+                                                                exprx)              
         return a
     if groupby == 'subsystem':
         for num_species in range(1, 5):
