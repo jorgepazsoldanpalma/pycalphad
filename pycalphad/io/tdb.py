@@ -11,6 +11,7 @@ import re
 from sympy import sympify, And, Or, Not, Intersection, Union, EmptySet, Interval, Piecewise
 from sympy import Symbol, GreaterThan, StrictGreaterThan, LessThan, StrictLessThan, Complement, S
 from sympy import Mul, Pow, Rational
+from sympy.utilities.lambdify import lambdify
 from sympy.abc import _clash
 from sympy.printing.str import StrPrinter
 from sympy.core.mul import _keep_coeff
@@ -32,7 +33,7 @@ import datetime
 import warnings
 import hashlib
 from copy import deepcopy
-
+import numpy as np
 # ast.Num is deprecated in Python 3.8 in favor of as ast.Constant
 # Both are whitelisted for compatability across versions
 _AST_WHITELIST = [ast.Add, ast.BinOp, ast.Call, ast.Constant, ast.Div,
@@ -1244,8 +1245,9 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
         anion_sub=[]
         full_stoich=[]
         if "IONIC_LIQ" in param_to_write.phase_name.upper():
+
             ionic_subl_1 = [i for subl in param_to_write.constituent_array for i in subl if i.charge>0 ] 
-            ionic_subl_2 = [i for subl in param_to_write.constituent_array for i in subl if i.charge<0 or i.charge==0 ] 
+            ionic_subl_2 = [i for subl in param_to_write.constituent_array for i in subl if i.charge<0 or i.charge==0 and i.name.isdigit()==False] 
             chg_constituents=ionic_subl_1+ionic_subl_2
             for chg in sorted(chg_constituents, key=lambda s: s.name):
                 full_stoich_monkey=[]
@@ -1261,6 +1263,8 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                     else:
                         anion_sub.append(charged_species_constituents)
                 elif chg.name in species_name:
+                    if '.' in anion_sub:
+                        del anion_sub[0]
                     sorted_element=sorted([el for el in chg.constituents.keys()])                    
                     neutral_species_ionic=['{}{}'.format(el, num) for i in sorted_element for el,num in chg.constituents.items() if el==i]
                     neutral_species_ionic=''.join([item for item in neutral_species_ionic])
@@ -1280,11 +1284,11 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             second_sublattice=','.join([anion for anion in anion_sub])
             first_sublattice=','.join([cation for cation in cation_sub])
             colon=':'
-            constituents=first_sublattice+colon+second_sublattice
-#        else:
-#            constituents = ':'.join([','.join(sorted([i.name.upper() for i in subl]))
-#                             for subl in param_to_write.constituent_array])            
-#            anion_sub= anion_sub + neutral_anion
+            if len(first_sublattice)>0:
+                constituents=first_sublattice+colon+second_sublattice
+            else:
+                constituents=second_sublattice
+
 
 ##################################
 
@@ -1359,11 +1363,10 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                     
         if phase_type=='ionic' and param_to_write.diffusing_species == None:
             param_to_write.diffusing_species==Species(param_to_write.diffusing_species)
-            
         if not isinstance(paramx, Piecewise):
             # Non-piecewise parameters need to be wrapped to print correctly
             # Otherwise TC's TDB parser will fail
-            paramx = Piecewise((paramx, And(v.T >= 1, v.T < 10000)))
+            paramx = Piecewise((paramx, And(v.T >= 298.15, v.T < 10000)))
         exprx = TCPrinter().doprint(paramx).upper()
         if ';' not in exprx:
             exprx += '; N'
@@ -1375,13 +1378,12 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
             name=param_to_write.phase_name.upper()
             name=[i for count,i in enumerate(name) if count!=len(name)-1 and count!=len(name)-2]
             name=''.join([letter for letter in name])
-
             a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
                                                                 name,
                                                                 ds,
                                                                 constituents,
                                                                 param_to_write.parameter_order,
-                                                                exprx)      
+                                                                exprx) 
         else:
             a="PARAMETER {}({}{},{};{}) {} !\n".format(param_to_write.parameter_type.upper(),
                                                                 param_to_write.phase_name.upper(),

@@ -125,10 +125,16 @@ class IntervalG(IntervalBase):
         """Return an expression for the energy in this temperature interval"""
         energy = S.Zero
         # Add fixed energy terms
-        energy += sum([C*GIBBS_TERMS[i] for C, i in zip(self.coefficients, indices)])
-        # Add additional energy coefficient-exponent pair terms
-        energy += sum([addit_term.expr() for addit_term in self.additional_coeff_pairs])
-        # P-T molar volume terms, not supported
+        if isinstance(indices[len(indices)-1],str):
+            Normalization=float(indices[len(indices)-1])
+            energy += sum([(1/Normalization)*C*GIBBS_TERMS[i] for C, i in zip(self.coefficients, indices)])
+            # Add additional energy coefficient-exponent pair terms
+            energy += sum([(1/Normalization)*addit_term.expr() for addit_term in self.additional_coeff_pairs])
+        else:
+            energy += sum([C*GIBBS_TERMS[i] for C, i in zip(self.coefficients, indices)])
+            # Add additional energy coefficient-exponent pair terms
+            energy += sum([addit_term.expr() for addit_term in self.additional_coeff_pairs])
+            # P-T molar volume terms, not supported
         if len(self.PTVm_terms) > 0:
             raise NotImplementedError("P-T molar volume terms are not supported")
         return energy
@@ -220,8 +226,27 @@ class EndmemberQKTO(Endmember):
 @dataclass
 class EndmemberSUBI(Endmember):
 
+    def expr(self, indices):
+        """Return a Piecewise (in temperature) energy expression for this endmember (i.e. only the data from the energy intervals)"""
+        T_min = 298.15
+        expr_cond_pairs = []
+
+        for interval in self.intervals:
+            expr_cond_pairs.append(interval.expr_cond_pair(indices, T_min=T_min))
+            T_min = interval.T_max
+        # a (expr, True) condition must be at the end
+        expr_cond_pairs.append((S.Zero, S.true))
+        return Piecewise(*expr_cond_pairs, evaluate=False)
+    
     def insert(self, dbf: Database, phase_name: str, constituent_array: List[List[str]], gibbs_coefficient_idxs: List[int]):
-        dbf.add_parameter('G', phase_name, constituent_array, 0, self.expr(gibbs_coefficient_idxs), force_insert=False)
+        Normalization=[i for i in constituent_array if isinstance(i, list)==False]
+        if len(Normalization)==0:
+            dbf.add_parameter('G', phase_name, constituent_array, 0, self.expr(gibbs_coefficient_idxs), force_insert=False)
+        else:
+            gibbs_coefficient_idxs.append(Normalization[0])
+            dbf.add_parameter('G', phase_name, constituent_array, 0, self.expr(gibbs_coefficient_idxs), force_insert=False)
+            del gibbs_coefficient_idxs[len(gibbs_coefficient_idxs)-1]
+            
         
     
 @dataclass
@@ -746,6 +771,7 @@ class ExcessSUBI():
         species_dict = {s.name: s for s in self.species}
 ####****03-22-2022****###
 ####Added diffusing species here since it kept giving me errors for it#####
+
         new_parameter = {
             'phase_name': 'IONIC_LIQ',
             'constituent_array':tuple(tuple(species_dict.get(s.upper(), v.Species(s)) for s in xs) for xs in constituent_array),  # must be hashable type
@@ -922,17 +948,6 @@ class Phase_SUBI(PhaseBase):
         #    quadruplets. AB:XX means mixing between AA:XX - BB:XX, so we can
         #    enter the constituent array as normal with mixing between them.
 
-        # One thing we'll have to keep track of is repeated species that have
-        # different charge. Since pycalphad usually uses Species to
-        # differentiate charged species, for example Species('CU', charge=1)
-        # vs. Species('CU', charge=2) and we are using Speices to refer to a
-        # quadruplet which may have both CU+1 and CU+2 states inside, we need
-        # to add an additional qualifier to the name of the elements in the
-        # species so that we can clearly differentiate the (CU+1 CU+1):(XY)
-        # quadruplet from the (CU+2 CU+2):(XY) quadruplet. We do that by adding
-        # the charge to the name (without +/-), i.e. CU_1 or CU_1.0. One benefit
-        # of doing this is that we don't have to worry about Species name
-        # collisions within the Database.
 
         # First: get the pair and quadruplet species added to the database:
         # Here we rename the species names according to their charges, to avoid creating duplicate pairs/quadruplets
@@ -960,10 +975,38 @@ class Phase_SUBI(PhaseBase):
 
         num_pairs = len(list(itertools.product(cations, anions)))
         assert len(self.endmembers) == num_pairs
-        
+
         # Endmember pairs came in order of the specified subl_const_idx_pairs labels.
+        count_repeating_anion_endmember=[]
         for (i, j), endmember in zip(self.subl_const_idx_pairs, self.endmembers):
-            endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)
+            num_constitu_endmem=[i for i in endmember.stoichiometry_pure_elements if i>0.0]
+            spec_constitu_endmem=[count for count,i in enumerate(endmember.stoichiometry_pure_elements) if i>0.0]
+            questionable_anions=[anions[j-1]]
+            questionable_cations=[cations[i-1]]
+            neutral_anion=[i for i in questionable_anions if i in pure_elements]
+            vacancy_present=[i for i in questionable_anions if 'Va' in i or 'VA' in i]
+            complex_anion=[i for i in questionable_anions if i not in pure_elements and '-' not in i]
+
+
+            if len(num_constitu_endmem)==2.0 and len(complex_anion)==0.0 and len(complex_anion)==0:
+                endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)
+            elif len(num_constitu_endmem)<2.0 and len(vacancy_present)>0.0 and len(complex_anion)==0:
+                endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)   
+            elif len(num_constitu_endmem)<2.0 and len(neutral_anion)>0.0 and len(complex_anion)==0:
+                if anions[j-1] not in count_repeating_anion_endmember:
+                    Normalization=int(endmember.stoichiometry_pure_elements[spec_constitu_endmem[0]])
+                    count_repeating_anion_endmember.append(anions[j-1])                
+                    endmember.insert(dbf, self.phase_name, [[anions[j-1]],str(Normalization)], gibbs_coefficient_idxs)
+                else:
+                    pass 
+            elif len(complex_anion)>0:
+                if anions[j-1] not in count_repeating_anion_endmember:                
+                    Normalization=sum(num_constitu_endmem)
+                    count_repeating_anion_endmember.append(anions[j-1])
+                    endmember.insert(dbf, self.phase_name, [[anions[j-1]],str(Normalization)], gibbs_coefficient_idxs)
+                else:
+                    pass
+#                print('Your twenties',self.phase_name,[['VA'],[anions[j-1]]])
         # Fifth: add excess parameters
         for index,excess_param in enumerate(self.excess_parameters):
             excess_param.insert(dbf, 'IONIC_LIQ:Y', cations, anions)
@@ -1111,7 +1154,6 @@ def parse_endmember_subi(toks: TokenParser, num_pure_elements: int, num_gibbs_co
     # add an extra "pure element" to parse the charge
     em = parse_endmember(toks, num_pure_elements, num_gibbs_coeffs)
     # TODO: needs special QKTO endmember to store these, the stoichiometric factors and chemical groups should be parsed into model hints or something...
-
     return EndmemberSUBI(em.species_name, em.gibbs_eq_type, em.stoichiometry_pure_elements, em.intervals)
 
 def parse_quadruplet(toks):
@@ -1184,7 +1226,6 @@ def parse_phase_subi(toks, phase_name, phase_type, num_pure_elements, num_gibbs_
     number_species_charges=toks.parse(int)
     cations_charges = toks.parseN(num_cations_species, str)
     anions_charges = toks.parseN(num_anions_species, str)  
-
     subl_1_pair_idx = toks.parseN(num_cations_species*num_anions_species, int)
     subl_2_pair_idx = toks.parseN(num_cations_species*num_anions_species, int)
 
