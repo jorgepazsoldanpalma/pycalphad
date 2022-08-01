@@ -985,23 +985,26 @@ class Phase_SUBI(PhaseBase):
             questionable_cations=[cations[i-1]]
             neutral_anion=[i for i in questionable_anions if i in pure_elements]
             vacancy_present=[i for i in questionable_anions if 'Va' in i or 'VA' in i]
-            complex_anion=[i for i in questionable_anions if i not in pure_elements and '-' not in i]
+            neutral_complex_anion=[i for i in questionable_anions if i not in pure_elements and '-' not in i]
 
 
-            if len(num_constitu_endmem)==2.0 and len(complex_anion)==0.0 and len(complex_anion)==0:
+            if len(num_constitu_endmem)==2.0 and len(neutral_complex_anion)==0.0 and len(vacancy_present)==0.0:
                 endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)
-            elif len(num_constitu_endmem)<2.0 and len(vacancy_present)>0.0 and len(complex_anion)==0:
+            elif len(num_constitu_endmem)<2.0 and len(vacancy_present)>0.0 and len(neutral_complex_anion)==0:
                 endmember.insert(dbf, self.phase_name, [[cations[i-1]], [anions[j-1]]], gibbs_coefficient_idxs)   
-            elif len(num_constitu_endmem)<2.0 and len(neutral_anion)>0.0 and len(complex_anion)==0:
+            elif len(num_constitu_endmem)<2.0 and len(neutral_anion)>0.0 and len(neutral_complex_anion)==0:
                 if anions[j-1] not in count_repeating_anion_endmember:
                     Normalization=int(endmember.stoichiometry_pure_elements[spec_constitu_endmem[0]])
                     count_repeating_anion_endmember.append(anions[j-1])                
                     endmember.insert(dbf, self.phase_name, [[anions[j-1]],str(Normalization)], gibbs_coefficient_idxs)
                 else:
                     pass 
-            elif len(complex_anion)>0:
-                if anions[j-1] not in count_repeating_anion_endmember:                
-                    Normalization=sum(num_constitu_endmem)
+            elif len(neutral_complex_anion)>0:
+                if anions[j-1] not in count_repeating_anion_endmember:  
+                    min_val=min(num_constitu_endmem)
+                    multiple_checker=[i/min_val for i in num_constitu_endmem if i%min_val==0]
+                    Normalization=sum(multiple_checker)
+                    
                     count_repeating_anion_endmember.append(anions[j-1])
                     endmember.insert(dbf, self.phase_name, [[anions[j-1]],str(Normalization)], gibbs_coefficient_idxs)
                 else:

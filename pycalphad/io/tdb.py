@@ -1288,7 +1288,7 @@ def write_tdb(dbf, fd, groupby='subsystem', if_incompatible='warn'):
                 constituents=first_sublattice+colon+second_sublattice
             else:
                 constituents=second_sublattice
-
+            
 
 ##################################
 
