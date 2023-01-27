@@ -4,6 +4,7 @@ calculations under specified conditions.
 """
 import copy
 import warnings
+import statistics
 from symengine import exp, log, Abs, Add, And, Float, Mul, Piecewise, Pow, S, sin, StrictGreaterThan, Symbol, zoo, oo
 from tinydb import where
 import pycalphad.variables as v
@@ -12,6 +13,8 @@ from pycalphad.core.constants import MIN_SITE_FRACTION
 from pycalphad.core.utils import unpack_components, get_pure_elements, wrap_symbol
 import numpy as np
 from collections import OrderedDict
+from statistics import mode
+import itertools
 
 # Maximum number of levels deep we check for symbols that are functions of
 # other symbols
@@ -96,6 +99,8 @@ class ReferenceState():
         else:
             s = "ReferenceState('{}', '{}')".format(self.species.name, self.phase_name)
         return s
+
+
 
 
 class Model(object):
@@ -517,6 +522,24 @@ class Model(object):
             return False
         return any([len(sublattice) > 1 for sublattice in constituent_array])
 
+    def COMP_interaction_test(self, constituent_array):
+        """
+        Return True if the constituent_array is valid and has more than one
+        species in at least one sublattice.
+        """
+        if not self._array_validity(constituent_array):
+            return False
+###PREVIOUSLY THIS WAS DONE LIKE IN THE FOLLOWING LINE BEFORE ADDING SET FUNCTION
+#        return any([len(sublattice) > 1 for sublattice in constituent_array])
+        _bool=[]
+        for sublattice in constituent_array:
+            same_ele=set(sublattice)
+            boooool=len(same_ele) == 1
+            _bool.append(boooool)
+                    
+        return all(_bool)
+
+        
     @property
     def _site_ratio_normalization(self):
         """
@@ -1351,14 +1374,188 @@ class Model(object):
             # substitution of fixed state variables has to happen after getting the attribute in case there are any derivatives involving that state variable
             for out in reference_dict.keys():
                 mod_out = self.symbol_replace(getattr(mod_pure, out), ref_state.fixed_statevars)
-                reference_dict[out].append(mod_out*moles)
 
+                reference_dict[out].append(mod_out*moles)
         # set the attribute on the class
         for out, terms in reference_dict.items():
             reference_contrib = Add(*terms)
             referenced_value = getattr(self, out) - reference_contrib
             setattr(self, fmt_str.format(out), referenced_value)
 
+    def shift_reference_state_defined_components(self, defined_components,reference_states, dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):
+        model_pure_elements = set(get_pure_elements(dbe, self.components))
+        ref_state_component=[]
+        contrib_mods = contrib_mods or {}
+        reference_phase=reference_states['phases']
+
+        ref_def_comp=[]
+        def_comp=[]
+        for ref,values in reference_states['conditions'].items():
+            for key,val in values.items():
+                if key.startswith('X_') and values[key]!=0:
+                    def_comp.append(key.split('_')[1])
+                    True_comp=[val for val in defined_components[key.split('_')[1]]]
+                    ref_state_component.append(True_comp)
+                    ref_def_comp.append(True_comp)
+        ref_state_component=set([u for i in ref_state_component for u in i])
+        if ref_state_component!=model_pure_elements:
+            raise DofError("Components do not match the system of interest: {}".format(ref_state_component))
+
+#        def moles_defined_components(self, composition_pseudobinary,defined_components)
+        Mix_vs_Form=[1 for phase in reference_phase if phase!=self.phase_name]
+        def _pure_element_test(constituent_array):
+            all_comps = set()
+            for sublattice in constituent_array:
+                if len(sublattice) != 1:
+                    return False
+                all_comps.add(sublattice[0].name)
+            pure_els = all_comps.intersection(model_pure_elements)
+            return len(pure_els) == 1
+        
+        endmember_only_dbe = copy.deepcopy(dbe)
+
+        reference_dict = {out: [] for out in output}  # output: terms list   
+        all_reference_endmembers=[]
+        all_reference_endmembers_elements=[]
+        type_of_phase={}
+##SMALL TEST HERE 11/27/22   
+        for key,val in endmember_only_dbe.phases.items():
+            if 'mqmqa' in val.model_hints and len(Mix_vs_Form)==0:
+                type_of_phase[key]=2
+            elif 'mqmqa' not in val.model_hints and len(Mix_vs_Form)==0:
+                type_of_phase[key]=1   
+            else:
+                type_of_phase[key]=3
+            for ref in ref_def_comp:   
+                reference_endmember_ele=[]
+
+                if key in reference_phase and len(all_reference_endmembers)<=len(ref_def_comp):
+                    single_sublattice_complex_species=[[species] \
+                                                       for sublattice in val.constituents for species in \
+                                                       sublattice if len(val.sublattices)==1 \
+                                                       and 'mqmqa' not in val.model_hints]
+                    
+                    single_sublattice_complex_element=[[element\
+                                                        for element in list_[0].constituents.keys()]\
+                                                       for list_ in single_sublattice_complex_species]
+                    
+                    single_sublattice_complex_element=[list(set(ele_end))\
+                                                       for ele_end in single_sublattice_complex_element]
+                    multiple_sublattice_complex_species=[[species] \
+                                                       for sublattice in val.constituents for species in \
+                                                         sublattice if len(val.sublattices)!=1]
+                   
+                    multiple_sublattice_complex_species=[[y for y in x]\
+                                                         for x in\
+                                                         itertools.product(*multiple_sublattice_complex_species)]
+
+                    multiple_sublattice_complex_element=[[element\
+                                                        for specie in list_ for element in specie.constituents.keys()]\
+                                                       for list_ in multiple_sublattice_complex_species]   
+                    
+                    multiple_sublattice_complex_element=[list(set(ele_end))\
+                                                       for ele_end in multiple_sublattice_complex_element]
+                    
+                    if 'mqmqa' in val.model_hints:
+                        mqmqa_single_quadruplet_endmember=[[species for species in chrg_species\
+                                                                   for name in species.constituents.keys() if name in ref] \
+                       for chrg_species in val.model_hints['mqmqa']['chemical_groups'].values() if 'mqmqa' in\
+                                                                   val.model_hints]
+                        mqmqa_single_quadruplet_endmember=[[y for y in x]\
+                                                             for x in\
+                                                             itertools.product(*mqmqa_single_quadruplet_endmember)] 
+
+                        mqmqa_single_quadruplet_endmember=[list(set(endmember)) for endmember\
+                                                           in mqmqa_single_quadruplet_endmember][0]
+                    else:
+                        mqmqa_single_quadruplet_endmember=[]
+
+#                          multiple_sublattice_complex_species,mqmqa_single_quadruplet_endmember)
+#                    print('how much they are',any(single_sublattice_complex_species),any(multiple_sublattice_complex_species),any(mqmqa_single_quadruplet_endmember))
+                    if any(mqmqa_single_quadruplet_endmember)==True:
+                        reference_endmember_ele.extend(mqmqa_single_quadruplet_endmember)
+                    elif any(single_sublattice_complex_species)==True and \
+                list(set(ref)) in single_sublattice_complex_element:      
+                        index_specie=single_sublattice_complex_element.index(list(set(ref)))
+                        reference_endmember_ele.extend(single_sublattice_complex_species[index_specie])
+                    elif any(multiple_sublattice_complex_species)==True and \
+                    list(set(ref)) in multiple_sublattice_complex_element:   
+                        index_specie=multiple_sublattice_complex_element.index(list(set(ref)))
+                        reference_endmember_ele.extend(multiple_sublattice_complex_species[index_specie])                        
+                    all_reference_endmembers.append(reference_endmember_ele)
+                    if any(all_reference_endmembers):
+                        all_reference_endmembers=[endmember for endmember in all_reference_endmembers if endmember] 
+                            
+        
+#        endmember_only_dbe._parameters.remove(~where('constituent_array').test(_pure_element_test))
+        Moles={}
+        for endmember,ref_pha in zip(all_reference_endmembers,reference_phase):
+            ele_of_endmem=[u for i in endmember for u in i.constituents.keys()]
+            checking_ele_rep=[const for endmember in all_reference_endmembers for ele in endmember for const in ele.constituents.keys()]
+            mode_checking_ele_rep=mode(checking_ele_rep)
+            reference_=[]
+            for nam_ref,ref in reference_states['conditions'].items():
+                for key,val in ref.items():
+                    if val!=0 and 'X_' in key:                        
+                        ele_of_ref=[i for i in defined_components[key.split('_')[1]].keys()]
+                        ref_end=defined_components[key.split('_')[1]]
+                        ref_name=key.split('_')[1]
+                        moles=[]
+                        if set(ele_of_ref)==set(ele_of_endmem):
+                            reference_.append(nam_ref)
+                            unique_checking_ele_rep=[ele for i in endmember for ele in i.constituents.keys() if ele!=mode_checking_ele_rep]
+
+                            moles=[self.moles(ele) for ele in ele_of_endmem if ele in unique_checking_ele_rep]
+
+                            ele_moles=[ele_str for ele in endmember for ele_str in ele.constituents.keys() \
+                                       if ele_str in unique_checking_ele_rep]
+                            if self.phase_name not in reference_phase:
+                                unique_moles=moles[0]#*correct_term[0]
+                                moles=[expression for expression in moles]
+                            else:
+                                unique_moles=moles[0]
+                            for ele in endmember:
+                                for ele_str in ele.constituents.keys():
+                                    if ele_str==mode_checking_ele_rep:
+                                        mode_moles=unique_moles*(ref_end[ele_str]/ref_end[ele_moles[0]])
+                                        moles.append(mode_moles)
+                            if len(moles)==0:
+                                continue
+                            else:
+                                moles=sum(moles)
+                            
+                        Moles[ref_name]=moles
+                    else:
+                        pass
+                
+            #Mode will return the first character of the list if there are no repeating characters
+            #That is why the lenght of the list will also be checked
+                
+                
+###########################################################################
+            if type_of_phase[ref_pha]==1:                endmember_only_dbe._parameters.remove(~where('constituent_array').test(self.COMP_interaction_test))
+            elif type_of_phase[ref_pha]==2:
+                endmember_only_dbe._parameters.remove(~where('constituent_array').test(self._interaction_test))  
+            elif type_of_phase[ref_pha]==3:                endmember_only_dbe._parameters.remove(where('constituent_array').test(self.COMP_interaction_test))
+            mod_pure = self.__class__(endmember_only_dbe, endmember, ref_pha, parameters=self._parameters_arg)
+            
+            site_frac_subs = {sf: 1 for sf in mod_pure.ast.free_symbols if isinstance(sf, v.SiteFraction)}
+            for mod_key, mod_val in mod_pure.models.items():
+                mod_pure.models[mod_key] = self.symbol_replace(mod_val, site_frac_subs)
+###May need to find a way to both normalize energy AND get correct moles to be subtracted#  
+    
+            for out in reference_dict.keys():
+                def_comp=[key.split('_')[1] for key,val in reference_states['conditions'][reference_[0]].items()\
+                          if 'X_' in key and val!=0]
+                state_var={key:value for key,value in reference_states['conditions'][reference_[0]].items() if 'X_' not in key}
+                state_var.update(site_frac_subs)
+                mod_out = self.symbol_replace(getattr(mod_pure, out), state_var)
+                reference_dict[out].append(mod_out*Moles[def_comp[0]])
+        for out, terms in reference_dict.items():
+            
+            reference_contrib = Add(*terms)
+            referenced_value = getattr(self, out) - reference_contrib
+            setattr(self, fmt_str.format(out), referenced_value)
 
 class TestModel(Model):
     """

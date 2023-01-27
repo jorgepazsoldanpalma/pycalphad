@@ -579,10 +579,7 @@ class SUBQQuadrupletCoordinations:
         if X!=sorted((X, Y))[0]:
             true_Z[2],true_Z[3]=true_Z[3],true_Z[2]
         constituent_array = [sorted((A, B)), sorted((X, Y))]
-        dbf.add_parameter(
-            "MQMZ", phase_name, constituent_array, param_order=None, param=None,
-            coordinations=true_Z, force_insert=False,
-            )
+        dbf.add_parameter("MQMZ", phase_name, constituent_array, param_order=None, param=None,coordinations=true_Z, force_insert=False,)
 
 
 @dataclass

@@ -348,6 +348,7 @@ def _compute_phase_values(components, statevar_dict,
             data_arrays.update({sym: (output_columns, vals)})
     if parameter_array_length > 1:
         data_arrays['param_values'] = (['samples', 'param_symbols'], parameter_array)
+#    print('This is data_arrays',data_arrays,coordinate_dict)
     return LightDataset(data_arrays, coords=coordinate_dict)
 
 

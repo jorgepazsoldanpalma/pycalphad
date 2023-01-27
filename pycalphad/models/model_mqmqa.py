@@ -1,3 +1,4 @@
+import copy
 import itertools
 from typing import List, Union
 from collections import OrderedDict
@@ -6,7 +7,7 @@ from symengine import log, S, Symbol
 from tinydb import where
 from pycalphad.model import _MAX_PARAM_NESTING
 import pycalphad.variables as v
-from pycalphad.core.utils import unpack_components, wrap_symbol
+from pycalphad.core.utils import unpack_components, wrap_symbol, get_pure_elements
 from pycalphad import Model
 from pycalphad.core.errors import DofError
 
@@ -116,7 +117,6 @@ class ModelMQMQA(Model):
         # Convert string symbol names to symengine Symbol objects
         # This makes xreplace work with the symbols dict
         symbols = {Symbol(s): val for s, val in dbe.symbols.items()}
-
         if parameters is not None:
             self._parameters_arg = parameters
             if isinstance(parameters, dict):
@@ -180,7 +180,7 @@ class ModelMQMQA(Model):
         return True
 
     def _array_validity(self, constituent_array):
-        """Return True if the constituent array is satisfies all components."""
+        """Return True if the constituent array satisfies all components."""
         for subl in constituent_array:
             for constituent in subl:
                 if constituent not in self.components:
@@ -492,14 +492,16 @@ class ModelMQMQA(Model):
 
     def Z(self, dbe, species: v.Species, A: v.Species, B: v.Species, X: v.Species, Y: v.Species):
         # Canonicalize the order of cations and anions in alphabetical order
+        # Note that the coordination number parameters (the constituents and
+        # the values) _must_ obey this canonical sorted order.
         A, B = sorted((A, B))
         X, Y = sorted((X, Y))
+        
         Zs = dbe._parameters.search(
             (where("phase_name") == self.phase_name) & \
             (where("parameter_type") == "MQMZ") & \
             (where("constituent_array").test(lambda x: x == ((A, B), (X, Y))))
         )
-#        print('Z is required',Zs,A,B,X,Y)
         if len(Zs) == 0:
             return self._calc_Z(dbe, species, A, B, X, Y)
         elif len(Zs) == 1:
@@ -507,7 +509,22 @@ class ModelMQMQA(Model):
             return Zs[0]["coordinations"][sp_idx]
         else:
             raise ValueError(f"Expected exactly one Z for {species} of {((A, B), (X, Y))}, got {len(Zs)}")
-
+############THIS IS AN ADDITION FROM JORGE. CHECKING IF THIS WILL BE NECESSARY######
+    def _interaction_test(self, constituent_array):
+        """
+        Return True if the constituent_array is valid and has more than one
+        species in at least one sublattice.
+        """
+        if not self._array_validity(constituent_array):
+            return False
+###PREVIOUSLY THIS WAS DONE LIKE IN THE FOLLOWING LINE BEFORE ADDING SET FUNCTION
+#        return any([len(sublattice) > 1 for sublattice in constituent_array])
+        for sublattice in constituent_array:
+            same_ele=set(sublattice)
+            boooool=len(same_ele) == 1
+            return boooool
+#        return any([len(set(sublattice)) > 1 for sublattice in constituent_array])
+#########################################################################
     def get_internal_constraints(self):
         constraints = []
         # Site fraction constraint
@@ -524,6 +541,7 @@ class ModelMQMQA(Model):
 
         Divide by this normalization factor to convert from J/mole-formula to J/mole-atoms
         """
+#        print('It is here as well',sum(self._n_i(self._dbe, i) for i in self.cations + self.anions if "VA" not in i.constituents))
         return sum(self._n_i(self._dbe, i) for i in self.cations + self.anions if "VA" not in i.constituents)
 
     def moles(self, species, per_formula_unit=False):
@@ -576,7 +594,6 @@ class ModelMQMQA(Model):
                 for y in self.anions:
                     X_ax += self._X_ijkl(a,b,x,y) * ((a == i) + (b == i)) * ((x == k) + (y == k)) / (2 * self.Z(dbe, a, a,b,x,y))
             G_ax = param["parameter"]
-#            print('reference energy my man',G_ax,X_ax)
             terms += X_ax * G_ax / param["stoichiometry"][0]
         return terms
 
@@ -709,7 +726,8 @@ class ModelMQMQA(Model):
             energy += 0.5 * g * (X_ijkl(A,B,X,Y) + cation_factor + anion_factor)
         return energy
 
-    def shift_reference_state(self, reference_states, dbe, contrib_mods=None, output=("GM", "HM", "SM", "CPM"), fmt_str="{}R"):
+    
+    def shift_reference_state(self, defined_components,reference_states, dbe, contrib_mods=None, output=("GM", "HM", "SM", "CPM"), fmt_str="{}R"):
         raise NotImplementedError()
 
     def build_phase(self, dbe):
@@ -756,4 +774,27 @@ class ModelMQMQA(Model):
 
     @property
     def reference_model(self):
-        raise NotImplementedError("Endmember reference models do not have a physical meaning for MQMQA models")
+        if self._reference_model is None:
+            endmember_only_dbe = copy.deepcopy(self._dbe)
+            ###Jorge commented this out on 10-11-22 to try and see how the mixing for MQMQA would work
+            endmember_only_dbe._parameters.remove(~where('constituent_array').test(self._interaction_test))
+            mod_endmember_only = self.__class__(endmember_only_dbe, self.components, self.phase_name, parameters=self._parameters_arg)
+            # Ideal mixing contributions are always generated, so we need to set the
+            # contribution of the endmember reference model to zero to preserve ideal
+            # mixing in this model.
+            mod_endmember_only.models['idmix'] = 0
+            if self.models.get('ord', S.Zero) != S.Zero:
+                warnings.warn(
+                    f"{self.phase_name} is a partitioned model with an ordering energy "
+                    "contribution. The choice of endmembers for the endmember "
+                    "reference model used by `_MIX` properties is ambiguous for "
+                    "partitioned models. The `Model.set_reference_state` method is a "
+                    "better choice for computing mixing energy. See "
+                    "https://pycalphad.org/docs/latest/examples/ReferenceStateExamples.html "
+                    "for an example."
+                )
+                for k in mod_endmember_only.models.keys():
+                    mod_endmember_only.models[k] = float('nan')
+            self._endmember_reference_model = mod_endmember_only
+        return self._endmember_reference_model        
+#        raise NotImplementedError("Endmember reference models do not have a physical meaning for MQMQA models")

@@ -41,11 +41,11 @@ def lower_convex_hull(global_grid, state_variables, result_array):
     comp_conds = sorted([x for x in sorted(result_array.coords.keys()) if x.startswith('X_')])
     comp_conds_indices = sorted([idx for idx, x in enumerate(sorted(result_array.coords['component']))
                                  if 'X_'+x in comp_conds])
-    comp_conds_indices = np.array(comp_conds_indices, dtype=np.uint64)
+    comp_conds_indices = np.array(comp_conds_indices, dtype=np.uintp)
     pot_conds = sorted([x for x in sorted(result_array.coords.keys()) if x.startswith('MU_')])
     pot_conds_indices = sorted([idx for idx, x in enumerate(sorted(result_array.coords['component']))
                                 if 'MU_'+x in pot_conds])
-    pot_conds_indices = np.array(pot_conds_indices, dtype=np.uint64)
+    pot_conds_indices = np.array(pot_conds_indices, dtype=np.uintp)
 
     if len(set(pot_conds_indices) & set(comp_conds_indices)) > 0:
         raise ValueError('Cannot specify component chemical potential and amount simultaneously')
@@ -86,7 +86,6 @@ def lower_convex_hull(global_grid, state_variables, result_array):
     global_grid_Y_values = global_grid.Y
     global_grid_Phase_values = global_grid.Phase
     num_comps = len(result_array.coords['component'])
-
     it = np.nditer(result_array_GM_values, flags=['multi_index'])
     comp_coord_shape = tuple(len(result_array.coords[cond]) for cond in comp_conds)
     pot_coord_shape = tuple(len(result_array.coords[cond]) for cond in pot_conds)
@@ -109,7 +108,6 @@ def lower_convex_hull(global_grid, state_variables, result_array):
         if len(pot_conds) > 0:
             pot_idx = np.ravel_multi_index(tuple(idx for idx, key in zip(it.multi_index, result_array_GM_dims) if key in pot_conds), pot_coord_shape)
             idx_pot_values = np.array(cart_pot_values[pot_idx, :])
-
         idx_global_grid_X_values = global_grid_X_values[indep_idx]
         idx_global_grid_GM_values = global_grid_GM_values[indep_idx]
         idx_result_array_MU_values = result_array_MU_values[it.multi_index]
@@ -118,6 +116,7 @@ def lower_convex_hull(global_grid, state_variables, result_array):
             idx_result_array_MU_values[pot_conds_indices[idx]] = idx_pot_values[idx]
         idx_result_array_NP_values = result_array_NP_values[it.multi_index]
         idx_result_array_points_values = result_array_points_values[it.multi_index]
+
         result_array_GM_values[it.multi_index] = \
             hyperplane(idx_global_grid_X_values, idx_global_grid_GM_values,
                        idx_comp_values, idx_result_array_MU_values, float(global_grid.coords['N'][0]),

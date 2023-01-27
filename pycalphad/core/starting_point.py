@@ -101,5 +101,5 @@ def starting_point(conditions, state_variables, phase_records, grid):
         result = lower_convex_hull(grid, state_variables, result)
     else:
         raise NotImplementedError('Conditions not yet supported')
-
+#    print('output of starting point',LightDataset.get_dataset(result))
     return result
