@@ -1387,7 +1387,6 @@ class Model(object):
         ref_state_component=[]
         contrib_mods = contrib_mods or {}
         reference_phase=reference_states['phases']
-
         ref_def_comp=[]
         def_comp=[]
         for ref,values in reference_states['conditions'].items():
@@ -1428,7 +1427,6 @@ class Model(object):
                 type_of_phase[key]=3
             for ref in ref_def_comp:   
                 reference_endmember_ele=[]
-
                 if key in reference_phase and len(all_reference_endmembers)<=len(ref_def_comp):
                     single_sublattice_complex_species=[[species] \
                                                        for sublattice in val.constituents for species in \
@@ -1441,6 +1439,7 @@ class Model(object):
                     
                     single_sublattice_complex_element=[list(set(ele_end))\
                                                        for ele_end in single_sublattice_complex_element]
+                                                       
                     multiple_sublattice_complex_species=[[species] \
                                                        for sublattice in val.constituents for species in \
                                                          sublattice if len(val.sublattices)!=1]
@@ -1455,6 +1454,9 @@ class Model(object):
                     
                     multiple_sublattice_complex_element=[list(set(ele_end))\
                                                        for ele_end in multiple_sublattice_complex_element]
+                                                       
+                                                       
+                   
                     
                     if 'mqmqa' in val.model_hints:
                         mqmqa_single_quadruplet_endmember=[[species for species in chrg_species\
@@ -1486,7 +1488,7 @@ class Model(object):
                     if any(all_reference_endmembers):
                         all_reference_endmembers=[endmember for endmember in all_reference_endmembers if endmember] 
                             
-        
+                    
 #        endmember_only_dbe._parameters.remove(~where('constituent_array').test(_pure_element_test))
         Moles={}
         for endmember,ref_pha in zip(all_reference_endmembers,reference_phase):
@@ -1504,9 +1506,7 @@ class Model(object):
                         if set(ele_of_ref)==set(ele_of_endmem):
                             reference_.append(nam_ref)
                             unique_checking_ele_rep=[ele for i in endmember for ele in i.constituents.keys() if ele!=mode_checking_ele_rep]
-
                             moles=[self.moles(ele) for ele in ele_of_endmem if ele in unique_checking_ele_rep]
-
                             ele_moles=[ele_str for ele in endmember for ele_str in ele.constituents.keys() \
                                        if ele_str in unique_checking_ele_rep]
                             if self.phase_name not in reference_phase:
@@ -1531,28 +1531,29 @@ class Model(object):
             #Mode will return the first character of the list if there are no repeating characters
             #That is why the lenght of the list will also be checked
                 
-                
 ###########################################################################
-            if type_of_phase[ref_pha]==1:                endmember_only_dbe._parameters.remove(~where('constituent_array').test(self.COMP_interaction_test))
+        
+            if type_of_phase[ref_pha]==1:
+                endmember_only_dbe._parameters.remove(~where('constituent_array').test(self.COMP_interaction_test))
             elif type_of_phase[ref_pha]==2:
                 endmember_only_dbe._parameters.remove(~where('constituent_array').test(self._interaction_test))  
-            elif type_of_phase[ref_pha]==3:                endmember_only_dbe._parameters.remove(where('constituent_array').test(self.COMP_interaction_test))
+            elif type_of_phase[ref_pha]==3:                
+                endmember_only_dbe._parameters.remove(where('constituent_array').test(self.COMP_interaction_test))
             mod_pure = self.__class__(endmember_only_dbe, endmember, ref_pha, parameters=self._parameters_arg)
-            
             site_frac_subs = {sf: 1 for sf in mod_pure.ast.free_symbols if isinstance(sf, v.SiteFraction)}
             for mod_key, mod_val in mod_pure.models.items():
                 mod_pure.models[mod_key] = self.symbol_replace(mod_val, site_frac_subs)
 ###May need to find a way to both normalize energy AND get correct moles to be subtracted#  
-    
+
             for out in reference_dict.keys():
                 def_comp=[key.split('_')[1] for key,val in reference_states['conditions'][reference_[0]].items()\
                           if 'X_' in key and val!=0]
                 state_var={key:value for key,value in reference_states['conditions'][reference_[0]].items() if 'X_' not in key}
                 state_var.update(site_frac_subs)
                 mod_out = self.symbol_replace(getattr(mod_pure, out), state_var)
+
                 reference_dict[out].append(mod_out*Moles[def_comp[0]])
-        for out, terms in reference_dict.items():
-            
+        for out, terms in reference_dict.items():   
             reference_contrib = Add(*terms)
             referenced_value = getattr(self, out) - reference_contrib
             setattr(self, fmt_str.format(out), referenced_value)

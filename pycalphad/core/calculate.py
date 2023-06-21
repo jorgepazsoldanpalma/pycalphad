@@ -267,10 +267,12 @@ def _compute_phase_values(components, statevar_dict,
 
     param_symbols, parameter_array = extract_parameters(parameters)
     parameter_array_length = parameter_array.shape[0]
+
     if parameter_array_length == 0:
         # No parameters specified
         phase_output = np.zeros(dof.shape[0], order='C')
         phase_record.obj_2d(phase_output, dof)
+
     else:
         # Vectorized parameter arrays
         phase_output = np.zeros((dof.shape[0], parameter_array_length), order='C')
@@ -278,7 +280,6 @@ def _compute_phase_values(components, statevar_dict,
 
     for el_idx in range(len(pure_elements)):
         phase_record.mass_obj_2d(phase_compositions[:, el_idx], dof, el_idx)
-
     max_tieline_vertices = len(pure_elements)
     if isinstance(phase_output, (float, int)):
         phase_output = broadcast_to(phase_output, points.shape[:-1])
@@ -348,7 +349,6 @@ def _compute_phase_values(components, statevar_dict,
             data_arrays.update({sym: (output_columns, vals)})
     if parameter_array_length > 1:
         data_arrays['param_values'] = (['samples', 'param_symbols'], parameter_array)
-#    print('This is data_arrays',data_arrays,coordinate_dict)
     return LightDataset(data_arrays, coords=coordinate_dict)
 
 

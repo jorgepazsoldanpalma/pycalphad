@@ -6,6 +6,7 @@ import numpy as np
 cimport numpy as np
 import pycalphad.variables as v
 import ctypes
+from libc.stdio cimport printf
 
 cdef class FastFunction:
     """``FastFunction`` provides a stable(-ish) interface that encapsulates SymEngine function pointers.
@@ -35,6 +36,7 @@ cdef double* alloc_dof_with_parameters(double[::1] dof, double[::1] parameters) 
     cdef double* dof_concat
     cdef int j
     cdef int num_dof = dof.shape[0] + parameters.shape[0]
+	
     if parameters.shape[0] == 0:
         dof_concat = &dof[0]
     else:
@@ -53,7 +55,6 @@ cdef double* alloc_dof_with_parameters_vectorized(double[:, ::1] dof, double[::1
     cdef int i, j
     cdef int num_inps = dof.shape[0]
     cdef int num_dof = dof.shape[1] + parameters.shape[0]
-
     if parameters.shape[0] == 0:
         dof_concat = &dof[0, 0]
     else:
