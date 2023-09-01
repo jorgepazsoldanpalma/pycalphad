@@ -1310,6 +1310,7 @@ class Model(object):
         return ordering_energy
 
     # TODO: fix case for VA interactions: L(PHASE,A,VA:VA;0)-type parameters
+    
     def shift_reference_state(self, reference_states, dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):
         """
         Add new attributes for calculating properties w.r.t. an arbitrary pure element reference state.
@@ -1396,7 +1397,7 @@ class Model(object):
                     True_comp=[val for val in defined_components[key.split('_')[1]]]
                     ref_state_component.append(True_comp)
                     ref_def_comp.append(True_comp)
-        ref_state_component=set([u for i in ref_state_component for u in i])
+        ref_state_component=set([u for i in ref_state_component for u in i if u!= 'VA'])
         if ref_state_component!=model_pure_elements:
             raise DofError("Components do not match the system of interest: {}".format(ref_state_component))
 
@@ -1463,21 +1464,20 @@ class Model(object):
                                                                    for name in species.constituents.keys() if name in ref] \
                        for chrg_species in val.model_hints['mqmqa']['chemical_groups'].values() if 'mqmqa' in\
                                                                    val.model_hints]
+
                         mqmqa_single_quadruplet_endmember=[[y for y in x]\
                                                              for x in\
-                                                             itertools.product(*mqmqa_single_quadruplet_endmember)] 
-
+                                                             itertools.product(*mqmqa_single_quadruplet_endmember)]
                         mqmqa_single_quadruplet_endmember=[list(set(endmember)) for endmember\
                                                            in mqmqa_single_quadruplet_endmember][0]
                     else:
                         mqmqa_single_quadruplet_endmember=[]
 
 #                          multiple_sublattice_complex_species,mqmqa_single_quadruplet_endmember)
-#                    print('how much they are',any(single_sublattice_complex_species),any(multiple_sublattice_complex_species),any(mqmqa_single_quadruplet_endmember))
                     if any(mqmqa_single_quadruplet_endmember)==True:
                         reference_endmember_ele.extend(mqmqa_single_quadruplet_endmember)
                     elif any(single_sublattice_complex_species)==True and \
-                list(set(ref)) in single_sublattice_complex_element:      
+                list(set(ref)) in single_sublattice_complex_element:  
                         index_specie=single_sublattice_complex_element.index(list(set(ref)))
                         reference_endmember_ele.extend(single_sublattice_complex_species[index_specie])
                     elif any(multiple_sublattice_complex_species)==True and \
@@ -1516,12 +1516,13 @@ class Model(object):
                                 unique_moles=moles[0]
                             for ele in endmember:
                                 for ele_str in ele.constituents.keys():
-                                    if ele_str==mode_checking_ele_rep:
+                                    if ele_str==mode_checking_ele_rep and ele_str!="VA":
                                         mode_moles=unique_moles*(ref_end[ele_str]/ref_end[ele_moles[0]])
                                         moles.append(mode_moles)
                             if len(moles)==0:
                                 continue
                             else:
+                                #print('These are moles before sum',moles)
                                 moles=sum(moles)
                             
                         Moles[ref_name]=moles
@@ -1530,7 +1531,6 @@ class Model(object):
                 
             #Mode will return the first character of the list if there are no repeating characters
             #That is why the lenght of the list will also be checked
-                
 ###########################################################################
         
             if type_of_phase[ref_pha]==1:
@@ -1551,13 +1551,14 @@ class Model(object):
                 state_var={key:value for key,value in reference_states['conditions'][reference_[0]].items() if 'X_' not in key}
                 state_var.update(site_frac_subs)
                 mod_out = self.symbol_replace(getattr(mod_pure, out), state_var)
-
                 reference_dict[out].append(mod_out*Moles[def_comp[0]])
         for out, terms in reference_dict.items():   
             reference_contrib = Add(*terms)
             referenced_value = getattr(self, out) - reference_contrib
             setattr(self, fmt_str.format(out), referenced_value)
 
+        
+        
 class TestModel(Model):
     """
     Test Model object for global minimization.

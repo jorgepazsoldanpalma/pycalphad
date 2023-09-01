@@ -215,6 +215,7 @@ class ModelMQMQA(Model):
         n_ik = S.Zero
         for a, b, x, y in self._quadruplets:
             n_ik += self._X_ijkl(a, b, x, y) * ((a == i) + (b == i)) * ((x == k) + (y == k))
+            
         return n_ik
 
     def _n_ik_star(self, i, k):
@@ -264,7 +265,7 @@ class ModelMQMQA(Model):
             k = species
             for a, b, x, y in self._quadruplets:
                 n_i += self._X_ijkl(a, b, x, y) * ((x == k) / Z(x, a, b, x, y) + (y == k) / Z(y, a, b, x, y))
-        return n_i
+        return species.number_of_atoms*n_i
 
     def _X_i(self, dbe, species: v.Species):
         """
