@@ -256,6 +256,7 @@ class ModelMQMQA(Model):
         """
         Z = partial(self.Z, dbe)  # alias for notation
         n_i = S.Zero
+        name=[key for key in species.constituents.keys()][0]
         if species in self.cations:
             i = species
             for a, b, x, y in self._quadruplets:
@@ -265,7 +266,11 @@ class ModelMQMQA(Model):
             k = species
             for a, b, x, y in self._quadruplets:
                 n_i += self._X_ijkl(a, b, x, y) * ((x == k) / Z(x, a, b, x, y) + (y == k) / Z(y, a, b, x, y))
-        return species.number_of_atoms*n_i
+        if name!='VA':
+            n_i=n_i*species.number_of_atoms 
+        else:
+            n_i=n_i
+        return n_i
 
     def _X_i(self, dbe, species: v.Species):
         """
