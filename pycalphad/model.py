@@ -1383,6 +1383,60 @@ class Model(object):
             referenced_value = getattr(self, out) - reference_contrib
             setattr(self, fmt_str.format(out), referenced_value)
 
+
+    def shift_partial_pressure(self, reference_states, dbe, contrib_mods=None):
+        output=['GM']
+        phase=reference_states['phases']
+        endmember_only_dbe = copy.deepcopy(dbe)        
+        endmember_spec=reference_states['species']
+        endmember_spec_ele=list(set([i for name,const in endmember_spec.items() for i in const.keys()]))
+        endmember_spec_stoi=list(set([i for name,const in endmember_spec.items() for i in const.values()]))
+        endmember=[]
+        reference_dict = {out: [] for out in output}
+        
+        for key,val in endmember_only_dbe.phases.items():
+            if key==phase[0]:
+                single_sublattice_complex_species=[species \
+                                                       for sublattice in val.constituents for species in \
+                                                       sublattice if len(val.sublattices)==1]
+
+                checking=[i for i in single_sublattice_complex_species \
+                if list(set(i.constituents.keys()))==endmember_spec_ele and \
+                list(set(i.constituents.values()))==endmember_spec_stoi]
+                endmember.append(checking[0])
+        mod_pure = self.__class__(endmember_only_dbe, endmember, phase[0], parameters=self._parameters_arg)
+
+        site_frac_subs={}
+#        site_frac_subs = {sf: 1 for sf in mod_pure.ast.free_symbols if isinstance(sf, v.SiteFraction) \
+#        and list(set(sf.species.constituents.values()))==endmember_spec_stoi \
+#        and list(set(sf.species.constituents.keys()))==endmember_spec_ele}
+        
+        for sf in mod_pure.ast.free_symbols:
+            if isinstance(sf, v.SiteFraction):
+                if list(set(sf.species.constituents.values()))==endmember_spec_stoi \
+                    and list(set(sf.species.constituents.keys()))==endmember_spec_ele:  
+                     site_frac_subs[sf]=1   
+                else:
+                    site_frac_subs[sf]=1e-15
+            else:
+                pass
+        
+        for mod_key, mod_val in mod_pure.models.items():
+            mod_pure.models[mod_key] = self.symbol_replace(mod_val, site_frac_subs)
+        state_var={}
+        
+        state_var['P']=reference_states['conditions']['P']
+        state_var['T']=reference_states['conditions']['T'][0]
+        state_var.update(site_frac_subs)
+        mod_out = self.symbol_replace(getattr(mod_pure, output[0]), state_var)
+        reference_dict[output[0]].append(mod_out)
+        for out, terms in reference_dict.items():   
+            reference_contrib = Add(*terms)
+            print('This is the model out',reference_contrib)
+            referenced_value = reference_contrib
+            setattr(self, 'GMR', referenced_value)
+
+            
     def shift_reference_state_defined_components(self, defined_components,reference_states, dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):
         model_pure_elements = set(get_pure_elements(dbe, self.components))
         ref_state_component=[]
@@ -1440,7 +1494,6 @@ class Model(object):
                     
                     single_sublattice_complex_element=[list(set(ele_end))\
                                                        for ele_end in single_sublattice_complex_element]
-                                                       
                     multiple_sublattice_complex_species=[[species] \
                                                        for sublattice in val.constituents for species in \
                                                          sublattice if len(val.sublattices)!=1]
@@ -1483,8 +1536,11 @@ class Model(object):
                     elif any(multiple_sublattice_complex_species)==True and \
                     list(set(ref)) in multiple_sublattice_complex_element:   
                         index_specie=multiple_sublattice_complex_element.index(list(set(ref)))
-                        reference_endmember_ele.extend(multiple_sublattice_complex_species[index_specie])                        
+                        reference_endmember_ele.extend(multiple_sublattice_complex_species[index_specie])
+                    else:
+                        pass
                     all_reference_endmembers.append(reference_endmember_ele)
+
                     if any(all_reference_endmembers):
                         all_reference_endmembers=[endmember for endmember in all_reference_endmembers if endmember] 
                             

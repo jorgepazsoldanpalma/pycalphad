@@ -6,6 +6,8 @@ from pycalphad.core.constants import MIN_SITE_FRACTION
 cimport scipy.linalg.cython_lapack as cython_lapack
 from libc.stdlib cimport malloc, free
 
+
+
 @cython.boundscheck(False)
 cdef void lstsq(double *A, int M, int N, double* x, double rcond) nogil:
     cdef int i
