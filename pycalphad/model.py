@@ -100,6 +100,12 @@ class ReferenceState():
             s = "ReferenceState('{}', '{}')".format(self.species.name, self.phase_name)
         return s
 
+class classproperty(object):
+    # https://stackoverflow.com/questions/5189699/how-to-make-a-class-property
+    def __init__(self, f):
+        self.f = f
+    def __get__(self, obj, owner):
+        return self.f(owner)
 
 
 
@@ -157,7 +163,14 @@ class Model(object):
     contributions = [('ref', 'reference_energy'), ('idmix', 'ideal_mixing_energy'),
                      ('xsmix', 'excess_mixing_energy'), ('mag', 'magnetic_energy'),
                      ('2st', 'twostate_energy'), ('ein', 'einstein_energy'),
-                     ('ord', 'atomic_ordering_energy')]
+                     ('vol', 'volume_energy'), ('ord', 'atomic_ordering_energy')]
+
+    # Behave as if piecewise temperature bounds extend to +-inf (i.e., ignore lower/upper T limits for parameters)
+    # This follows the behavior of most commercial codes, but may be undesirable in some circumstances
+    # Designed to be readonly on instances, because mutation after initialization will not work
+    @classproperty
+    def extrapolate_temperature_bounds(cls):
+        return True
 
     def __new__(cls, *args, **kwargs):
         target_cls = cls._dispatch_on(*args, **kwargs)
@@ -266,8 +279,47 @@ class Model(object):
         self.site_fractions = sorted([x for x in self.variables if isinstance(x, v.SiteFraction)], key=str)
         self.state_variables = sorted([x for x in self.variables if not isinstance(x, v.SiteFraction)], key=str)
 
-    @staticmethod
-    def symbol_replace(obj, symbols):
+    @classmethod
+    def unwrap_piecewise(cls, graph):
+        from pycalphad.io.tdb import to_interval
+        replace_dict = {}
+        for atom in graph.atoms(Piecewise):
+            args = atom.args
+            # Unwrap temperature-dependent piecewise with zero-defaults
+            if len(args) == 4 and args[2] == 0 and args[3] == True and args[1].free_symbols == {v.T}:
+                replace_dict[atom] = args[0]
+            elif cls.extrapolate_temperature_bounds:
+                # Set lower and upper temperature limits to -+infinity
+                # First filter out default zero-branches
+                filtered_args = [(x, cond) for x, cond in zip(*[iter(args)]*2) if not ((cond == S.true) and (x == S.Zero))]
+                if len(filtered_args) == 0:
+                    continue
+                if not all([cond.free_symbols == {v.T} for _, cond in filtered_args]):
+                    # Only temperature-dependent piecewise conditions are supported for extrapolation
+                    continue
+                intervals = [to_interval(cond) for _, cond in filtered_args]
+                sortindices = [i[0] for i in sorted(enumerate(intervals), key=lambda x:x[1].args[0])]
+                if (intervals[sortindices[0]].args[0] == S.NegativeInfinity) and \
+                   (intervals[sortindices[-1]].args[1] == S.Infinity):
+                    # Nothing to do, temperature range already extrapolated
+                    continue
+                # First branch is special-cased to negative infinity
+                exprcondpairs = [(filtered_args[sortindices[0]][0], v.T < intervals[sortindices[0]].args[1])]
+                for idx in sortindices[1:-1]:
+                    exprcondpairs.append((filtered_args[sortindices[idx]][0],
+                                         And(v.T >= intervals[sortindices[idx]].args[0], v.T < intervals[sortindices[idx]].args[1])
+                    ))
+                # Last branch is special-cased to positive infinity
+                exprcondpairs.append((filtered_args[sortindices[-1]][0],
+                                      v.T >= intervals[sortindices[-1]].args[0]
+                ))
+                # Catch-all branch required for LLVM (should never hit in this formulation)
+                exprcondpairs.append((0, True))
+                replace_dict[atom] = Piecewise(*exprcondpairs)
+        return graph.xreplace(replace_dict)
+
+    @classmethod
+    def symbol_replace(cls, obj, symbols):
         """
         Substitute values of symbols into 'obj'.
 
@@ -285,6 +337,7 @@ class Model(object):
             # of other symbols
             for iteration in range(_MAX_PARAM_NESTING):
                 obj = obj.xreplace(symbols)
+                obj = cls.unwrap_piecewise(obj)
                 undefs = [x for x in obj.free_symbols if not isinstance(x, v.StateVariable)]
                 if len(undefs) == 0:
                     break
@@ -1140,7 +1193,7 @@ class Model(object):
         return disord_expr + ordering_expr
 
     def atomic_ordering_energy(self, dbe):
-        """
+        r"""
         Return the atomic ordering contribution in symbolic form.
 
         If the current phase is anything other than the ordered phase in a
@@ -1382,6 +1435,78 @@ class Model(object):
             reference_contrib = Add(*terms)
             referenced_value = getattr(self, out) - reference_contrib
             setattr(self, fmt_str.format(out), referenced_value)
+    
+    def volume_energy(self, dbe):
+        """
+        Return the volumetric contribution in symbolic form. Follows the approach by Lu, Selleby, and Sundman [1].
+
+        Parameters
+        ----------
+        dbe : Database
+            Database containing the relevant parameters.
+        
+        Notes
+        -----
+        The high-pressure portion of the model is not currently implemented.
+        The parameters needed for it are queried from the database; however, calculations
+        are reserved for future implementation.
+
+        References
+        ----------
+        [1] Lu, Selleby, and Sundman, Calphad, Vol. 29, No. 1, 2005, doi:10.1016/j.calphad.2005.04.001.
+        """
+
+        phase = dbe.phases[self.phase_name]
+        param_search = dbe.search
+
+        V0_param_query = (
+            (where('phase_name') == phase.name) & \
+            (where('parameter_type') == 'V0') & \
+            (where('constituent_array').test(self._array_validity))
+        )
+
+        VA_param_query = (
+            (where('phase_name') == phase.name) & \
+            (where('parameter_type') == 'VA') & \
+            (where('constituent_array').test(self._array_validity))
+        )
+
+        VK_param_query = (
+            (where('phase_name') == phase.name) & \
+            (where('parameter_type') == 'VK') & \
+            (where('constituent_array').test(self._array_validity))
+        )
+
+        VC_param_query = (
+            (where('phase_name') == phase.name) & \
+            (where('parameter_type') == 'VC') & \
+            (where('constituent_array').test(self._array_validity))
+        )
+
+        V0 = self.redlich_kister_sum(phase, param_search, V0_param_query)
+        VA = self.redlich_kister_sum(phase, param_search, VA_param_query)
+        VK = self.redlich_kister_sum(phase, param_search, VK_param_query)
+        VC = self.redlich_kister_sum(phase, param_search, VC_param_query)
+
+        # nonmagnetic contribution to volume
+        V_p0 = V0*exp(VA)
+
+        # magnetic contribution to volume
+        G_mag = self.models.get('mag')
+        V_mag = G_mag.diff(v.P)
+
+        self.MV = self.molar_volume = V_p0 + V_mag
+        volume_energy = S.Zero
+
+        if VK == 0:
+            volume_energy = V_p0*(v.P-101325)
+        else:
+            warnings.warn(
+                    f"The database for \"{self.phase_name}\" contains a term for the isothermal compressibility"
+                    f"however the pressure dependence has not been fully incorporated into the molar volume or"
+                    f"Gibbs free energy models. THE GIBBS ENERGY AND MOLAR VOLUME CALCULATIONS MAY BE INCORRECT.")
+
+        return volume_energy
 
 
     def shift_partial_pressure(self, reference_states, dbe, contrib_mods=None):
