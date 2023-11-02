@@ -928,20 +928,43 @@ def test_MQMQA_equilibrium_binary_excess_same_chemical_groups(load_database):
     assert np.all(eq.Phase.squeeze() == ['XS_SAME_CG', '', ''])
     assert np.allclose(eq.Y.values.squeeze()[0, :], [0.12442, 0.50078, 0.37481], atol=1e-5)  # Thermochimica result
 
-
 @select_database("MQMQA-tern-tests.dat")
-def test_MQMQA_ternary_equilibrium_ideal(load_database):
-    """Ternary ideal"""
+def test_MQMQA_equilibrium_binary_excess_same_chemical_groups(load_database):
+    """Binary excess terms with the same chemical group"""
     dbf = load_database()
-    comps = ['CU', 'MG', 'NI', 'VA']
-    eq = equilibrium(dbf, comps, ['TERN_IDEAL'], {v.P: 101325, v.T: 1000, v.N: 1, v.X('MG'): 0.2, v.X('NI'): 0.3})
+    comps = ['CU', 'NI', 'VA']
+    eq = equilibrium(dbf, comps, ['XS_SAME_CG'], {v.P: 101325, v.T: 1000, v.N: 1, v.X('NI'): 0.5})
     print('GM', eq.GM.values.squeeze())
     print('Y', eq.Y.values.squeeze())
     print('Phase', eq.Phase.values.squeeze())
-    assert np.isclose(eq.GM.values.squeeze(), -2.65610E+04)  # Thermochimica result
-    assert np.all(eq.Phase.squeeze() == ['TERN_IDEAL', '', '', ''])
-    assert np.allclose(eq.Y.values.squeeze()[0, :], [0.25000, 0.20000, 0.30000, 4.0000E-02, 0.12000, 9.0000E-02], atol=1e-5)  # Thermochimica result
+    assert np.isclose(eq.GM.values.squeeze(), -9.29581E+03)  # Thermochimica result
+    assert np.all(eq.Phase.squeeze() == ['XS_SAME_CG', '', ''])
+    assert np.allclose(eq.Y.values.squeeze()[0, :], [0.12442, 0.50078, 0.37481], atol=1e-5)  # Thermochimica result
 
+@select_database("Be-F-Li.dat")
+def test_MQMQA_species_of_different_moles(load_database):
+    """Ternary ideal"""
+    dbf = load_database()
+    comps = ['F', 'LI', 'BE', 'VA']
+    eq = equilibrium(dbf, comps, ['MSFL'], {v.N: 1, v.P: 101325, v.T: 1450, v.X('LI'):0.333333333333333, v.X('BE'):0.111111111111111})
+    print('GM', eq.GM.values.squeeze())
+    print('Y', eq.Y.values.squeeze())
+    print('Phase', eq.Phase.values.squeeze())
+    assert np.isclose(eq.GM.values.squeeze(), -3.83970E+05)  # Thermochimica result
+    assert np.all(eq.Phase.squeeze() == ['MSFL', '', '', ''])
+    assert np.allclose(eq.Y.values.squeeze()[0, :], [2.8044E-03, 0.27308, 2.1286E-03, 4.0389E-04, 0.18883,  0.53275], atol=1e-5)  # Thermochimica result
+
+@select_database("NaCl-AlCl3.dat")
+def test_MQMQA_when_vacancy_is_a_species(load_database):
+    """Ternary ideal"""
+    dbf = load_database()
+    comps = ['CL', 'AL', 'NA', 'VA']
+    eq = equilibrium(dbf, comps, ['MSSOLN'], {v.N: 1, v.P: 101325, v.T: 1400, v.X('NA'):0.5, v.X('CL'):0.375})
+    print('GM', eq.GM.values.squeeze())
+    print('Y', eq.Y.values.squeeze())
+    print('Phase', eq.Phase.values.squeeze())
+    assert np.isclose(eq.GM.values.squeeze(), -2.44826E+05)  # Thermochimica result
+    assert np.all(eq.Phase.squeeze() == ['MSSOLN', 'MSSOLN', '', ''])
 
 @select_database("MQMQA-tern-tests.dat")
 def test_MQMQA_ternary_equilibrium_xs_symm_111(load_database):
@@ -1056,3 +1079,29 @@ def test_eq_charge_ndzro(load_database):
                        rtol=5e-4)
     assert np.allclose(Y_PYRO, [9.99970071e-01, 2.99288042e-05, 3.83395063e-02, 9.61660494e-01, 9.93381787e-01,
                                 6.61821340e-03, 1.00000000e+00, 1.39970285e-03, 9.98600297e-01], rtol=5e-4)
+
+@pytest.mark.solver
+@select_database("crtiv_ghosh.tdb")
+def test_ternary_three_phase_dilute(load_database):
+    components = ["CR", "TI", "V"]
+    dbf = load_database()
+    phases = sorted(dbf.phases.keys())
+    conditions = {v.N: 1.0, v.P: 101325.0, v.T: 500.0}
+
+    # Got the MG to be stable with pdens=10
+    eq_res = equilibrium(dbf, components+["VA"], set(phases), {v.X("CR"): 0.20, v.X("TI"): 0.20, **conditions}, verbose=True, calc_opts=dict(pdens=60), to_xarray=False)
+    print(eq_res.Phase)
+    assert np.all(np.isclose(eq_res.MU.squeeze(), [-26103.482, -16869.033, -19606.779]))
+    # Sorting is pretty hacky, but gets the job done
+    assert np.all(np.isclose(sorted(eq_res.NP.squeeze()[:3]), [8.9018E-02, 1.6608E-01, 7.4490E-01]))
+    assert sorted(eq_res.Phase.squeeze()[:3]) == ["BCC_A2", "HCP_A3", "LAVES_C15"]
+
+@pytest.mark.solver
+@select_database("gibbs_phase_rule.tdb")
+def test_issue_468_gibbs_phase_rule(load_database):
+    components = ['FE','C','VA']
+    dbf = load_database()
+    phases = ['LIQUID', 'FCC_A1', 'BCC_A2', 'GRAPHITE', 'CEMENTITE', 'DIAMOND_A4']
+    eq = equilibrium(dbf, components, phases, {v.N:1, v.P:1e5, v.T:1080, v.X('C'):0.0053}, verbose=True)
+    assert sorted(eq.Phase.values.squeeze()) == ["", "BCC_A2", "GRAPHITE"]
+    assert np.allclose(sorted(eq.NP.values.squeeze()), [0.00015170798706395827, 0.999848292010574, np.nan], atol=1e-7, equal_nan=True)
