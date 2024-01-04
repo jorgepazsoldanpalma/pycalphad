@@ -1577,7 +1577,7 @@ class Model(object):
                     ref_state_component.append(True_comp)
                     ref_def_comp.append(True_comp)
         ref_state_component=set([u for i in ref_state_component for u in i if u!= 'VA'])
-        if ref_state_component!=model_pure_elements:
+        if set(ref_state_component).issubset(model_pure_elements) == False:
             raise DofError("Components do not match the system of interest: {}".format(ref_state_component))
 
 #        def moles_defined_components(self, composition_pseudobinary,defined_components)
