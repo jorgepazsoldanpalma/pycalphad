@@ -531,7 +531,8 @@ cdef class SystemState:
                 if self.phase_amt[idx] > 0:
                     self.mole_fractions[comp_idx] += self.phase_amt[idx] * csst.masses[comp_idx, 0]
                     self.system_amount += self.phase_amt[idx] * csst.masses[comp_idx, 0]
-                self.phase_compositions[idx, comp_idx] = csst.masses[comp_idx, 0]
+                self.phase_compositions[idx, comp_idx] = csst.masses[comp_idx, 0] 
+        self.system_amount = max(1e-16,self.system_amount)
         for comp_idx in range(self.mole_fractions.shape[0]):
             self.mole_fractions[comp_idx] /= self.system_amount
 
@@ -652,7 +653,6 @@ cpdef solve_state(SystemSpecification spec, SystemState state):
 
     state.previous_chemical_potentials[:] = state.chemical_potentials[:]
     state.recompute(spec)
-
     equilibrium_matrix, equilibrium_soln = construct_equilibrium_system(spec, state, 0)
 
     lstsq(&equilibrium_matrix[0,0], equilibrium_matrix.shape[0], equilibrium_matrix.shape[1],
