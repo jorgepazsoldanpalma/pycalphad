@@ -1509,6 +1509,59 @@ class Model(object):
         return volume_energy
 
 
+    def shift_thermochemical_gas_species(self,reference_states,dbe, contrib_mods=None, output=('GM', 'HM', 'SM', 'CPM'), fmt_str="{}R"):
+        phase=reference_states['phases']
+        endmember_only_dbe = copy.deepcopy(dbe)        
+        endmember_spec=reference_states['species']        
+        endmember=[]
+        reference_dict = {output[:-1]: [] }
+        endmember_spec_ele=list(set([i for name,const in endmember_spec.items() for i in const.keys()]))
+        endmember_spec_stoi=list(set([i for name,const in endmember_spec.items() for i in const.values()]))        
+        for key,val in endmember_only_dbe.phases.items():
+            if key==phase[0]:
+                single_sublattice_complex_species=[species \
+                                                       for sublattice in val.constituents for species in \
+                                                       sublattice if len(val.sublattices)==1]
+                                                       
+                checking=[i for i in single_sublattice_complex_species \
+                if list(set(i.constituents.keys()))==endmember_spec_ele and \
+                list(set(i.constituents.values()))==endmember_spec_stoi]
+                endmember.append(checking[0])
+        mod_pure = self.__class__(endmember_only_dbe, endmember, phase[0], parameters=self._parameters_arg)
+
+        site_frac_subs={}
+#        site_frac_subs = {sf: 1 for sf in mod_pure.ast.free_symbols if isinstance(sf, v.SiteFraction) \
+#        and list(set(sf.species.constituents.values()))==endmember_spec_stoi \
+#        and list(set(sf.species.constituents.keys()))==endmember_spec_ele}
+        
+        for sf in mod_pure.ast.free_symbols:
+            if isinstance(sf, v.SiteFraction):
+                if list(set(sf.species.constituents.values()))==endmember_spec_stoi \
+                    and list(set(sf.species.constituents.keys()))==endmember_spec_ele:  
+                     site_frac_subs[sf]=1   
+                else:
+                    site_frac_subs[sf]=1e-15
+            else:
+                pass
+
+        state_var={}
+                
+        state_var['T']=list(set([val['T'] for T,val in reference_states['conditions'].items()]))[0]
+        state_var['P']=list(set([val['P'] for T,val in reference_states['conditions'].items()]))[0]
+
+#        state_var['P']=reference_states['conditions']['P']
+#        state_var['T']=reference_states['conditions']['T'][0]
+        state_var.update(site_frac_subs)
+        mod_out = self.symbol_replace(getattr(mod_pure, output[:-1]), state_var)    
+        reference_dict[output[:-1]].append(mod_out)
+
+        for out, terms in reference_dict.items(): 
+            reference_contrib = Add(*terms)
+            referenced_value = reference_contrib
+            referenced_value =reference_contrib  
+            setattr(self, fmt_str.format(out), referenced_value)
+
+            
     def shift_partial_pressure(self, reference_states, dbe, contrib_mods=None):
         output=['GM']
         phase=reference_states['phases']
@@ -1518,7 +1571,6 @@ class Model(object):
         endmember_spec_stoi=list(set([i for name,const in endmember_spec.items() for i in const.values()]))
         endmember=[]
         reference_dict = {out: [] for out in output}
-        
         for key,val in endmember_only_dbe.phases.items():
             if key==phase[0]:
                 single_sublattice_complex_species=[species \
@@ -1557,7 +1609,6 @@ class Model(object):
         reference_dict[output[0]].append(mod_out)
         for out, terms in reference_dict.items():   
             reference_contrib = Add(*terms)
-            print('This is the model out',reference_contrib)
             referenced_value = reference_contrib
             setattr(self, 'GMR', referenced_value)
 
@@ -1709,7 +1760,6 @@ class Model(object):
                         Moles[ref_name]=moles
                     else:
                         pass
-                
             #Mode will return the first character of the list if there are no repeating characters
             #That is why the lenght of the list will also be checked
 ###########################################################################

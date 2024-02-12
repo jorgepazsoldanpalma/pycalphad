@@ -514,7 +514,6 @@ class ModelMQMQA(Model):
         # the values) _must_ obey this canonical sorted order.
         A, B = sorted((A, B))
         X, Y = sorted((X, Y))
-        
         Zs = dbe._parameters.search(
             (where("phase_name") == self.phase_name) & \
             (where("parameter_type") == "MQMZ") & \
