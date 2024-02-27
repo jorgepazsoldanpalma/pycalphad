@@ -1603,7 +1603,7 @@ class Model(object):
         state_var={}
         
         state_var['P']=reference_states['conditions']['P']
-        state_var['T']=reference_states['conditions']['T'][0]
+        state_var['T']=reference_states['conditions']['T']
         state_var.update(site_frac_subs)
         mod_out = self.symbol_replace(getattr(mod_pure, output[0]), state_var)
         reference_dict[output[0]].append(mod_out)
