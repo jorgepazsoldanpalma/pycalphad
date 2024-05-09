@@ -121,7 +121,6 @@ def _sample_phase_constitution(model, sampler, fixed_grid, pdens):
     # we do not consider that 'linearly constrained' for the purposes of sampling,
     # since the default sampler handles that case with an efficient method.
     linearly_constrained_space = charge_constrained_space
-
     if charge_constrained_space:
         endmembers = points
         Q = np.dot(endmembers, species_charge)
@@ -130,6 +129,7 @@ def _sample_phase_constitution(model, sampler, fixed_grid, pdens):
         charge_positive_endmember_idxs = []
         charge_negative_endmember_idxs = []
         for em_idx in range(endmembers.shape[0]):
+            print('inside for loop',Q[em_idx],em_idx)
             if Q[em_idx] > ALLOWED_CHARGE:
                 charge_positive_endmember_idxs.append(em_idx)
             elif Q[em_idx] < -ALLOWED_CHARGE:
@@ -139,6 +139,13 @@ def _sample_phase_constitution(model, sampler, fixed_grid, pdens):
 
         # Find all endmember pairs between the
         em_pts = [endmembers[em_idx] for em_idx in charge_neutral_endmember_idxs]
+#####THe ISSUE IS COMING FROM THIS SPECIFIV FOR LOOP WHERE THE POSITIVE AND NEGATIVE ENDMEMBERS ARE
+###MULTIPLIED TO CREAT THE SHAPE OF THE JACOBIAN MATRIX. UNFORTUNATELY IN THIS SPECIFIC SCENARIO
+###WITH THE HALITE PHASE IN THE TAF_ID DATABASE, THE CALCULATION WITH U AND O STILL ALLOW FOR THIS 
+####PHASE TO BE INCLUDED SINCE IT HAS O AND VACANCIES IN IT. DUE TO THE VACANCY ENDMEMBERS ONLY 
+####THE O-2 IS THE CHARGE CONSIDERED AND HENCE WHY CHARGE_NEGATIVE_ENDMEMBER_IDX IS THE ONLY THING FORMED
+###WHICH RESULTS IN THIS INCORRECT FOR LOOP. WILL BRING UP TO RICHARD AND BRANDONS
+        
         for pos_em_idx, neg_em_idx in itertools.product(charge_positive_endmember_idxs, charge_negative_endmember_idxs):
             # Solve equation: Q_{pos}*x + Q_{neg}(1-x) = 0
             x = - Q[neg_em_idx] / (Q[pos_em_idx] - Q[neg_em_idx])
@@ -166,6 +173,7 @@ def _sample_phase_constitution(model, sampler, fixed_grid, pdens):
             num_constraints = len(sublattice_dof) + 1
             constraint_jac = np.zeros((num_constraints, points.shape[-1]))
             constraint_rhs = np.zeros(num_constraints)
+
             # site fraction balance
             dof_idx = 0
             constraint_idx = 0
