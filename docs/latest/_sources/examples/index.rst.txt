@@ -5,10 +5,22 @@ Examples
    :maxdepth: 1
 
    BinaryExamples
-   CementiteAnalysis
-   EquilibriumWithOrdering
    TernaryExamples
+   Metastability
    ReferenceStateExamples
+   EquilibriumWithOrdering
+   CementiteAnalysis
+
+Advanced Examples
+=================
+
+.. toctree::
+   :maxdepth: 1
+
+   UsingCalculationResults
+   LegacyEnergySurface
+   LegacyReferenceState
+   ChargedPhases
    PlotActivity
    ViscosityModel
-   UsingCalculationResults
+   Mapping

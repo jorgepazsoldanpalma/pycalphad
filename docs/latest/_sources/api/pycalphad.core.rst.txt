@@ -20,18 +20,18 @@ pycalphad.core.calculate module
    :undoc-members:
    :show-inheritance:
 
-pycalphad.core.cartesian module
--------------------------------
-
-.. automodule:: pycalphad.core.cartesian
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 pycalphad.core.composition\_set module
 --------------------------------------
 
 .. automodule:: pycalphad.core.composition_set
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pycalphad.core.conditions module
+--------------------------------
+
+.. automodule:: pycalphad.core.conditions
    :members:
    :undoc-members:
    :show-inheritance:
@@ -108,10 +108,10 @@ pycalphad.core.lower\_convex\_hull module
    :undoc-members:
    :show-inheritance:
 
-pycalphad.core.patched\_piecewise module
-----------------------------------------
+pycalphad.core.minimizer module
+-------------------------------
 
-.. automodule:: pycalphad.core.patched_piecewise
+.. automodule:: pycalphad.core.minimizer
    :members:
    :undoc-members:
    :show-inheritance:
@@ -124,10 +124,10 @@ pycalphad.core.phase\_rec module
    :undoc-members:
    :show-inheritance:
 
-pycalphad.core.problem module
------------------------------
+pycalphad.core.polytope module
+------------------------------
 
-.. automodule:: pycalphad.core.problem
+.. automodule:: pycalphad.core.polytope
    :members:
    :undoc-members:
    :show-inheritance:
@@ -152,6 +152,14 @@ pycalphad.core.utils module
 ---------------------------
 
 .. automodule:: pycalphad.core.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+pycalphad.core.workspace module
+-------------------------------
+
+.. automodule:: pycalphad.core.workspace
    :members:
    :undoc-members:
    :show-inheritance:

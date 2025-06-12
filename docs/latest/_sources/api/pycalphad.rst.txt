@@ -10,7 +10,10 @@ Subpackages
    pycalphad.codegen
    pycalphad.core
    pycalphad.io
+   pycalphad.mapping
+   pycalphad.models
    pycalphad.plot
+   pycalphad.property_framework
 
 Submodules
 ----------
@@ -19,14 +22,6 @@ pycalphad.model module
 ----------------------
 
 .. automodule:: pycalphad.model
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-pycalphad.refdata module
-------------------------
-
-.. automodule:: pycalphad.refdata
    :members:
    :undoc-members:
    :show-inheritance:
